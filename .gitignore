@@ -1,0 +1,32 @@
+
+# documentation
+wiki/
+TODO.md
+
+# Environment
+.env
+
+# Node
+node_modules/
+app/node_modules/
+
+# Astro build output
+app/dist/
+app/.astro/
+
+# Mintlayer data directory (node + wallet files)
+mintlayer-data/
+
+# Docker volumes
+postgres-data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.claude/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,102 @@
+---
+import '@/styles/global.css';
+import ToastContainer from '@/components/ToastContainer';
+
+export interface Props {
+  title?: string;
+  activeNav?: 'dashboard' | 'management' | 'balances' | 'staking' | 'token-management' | 'trading' | 'setup';
+}
+
+const { title = 'Home', activeNav } = Astro.props;
+const network = (process.env.NETWORK ?? 'mainnet').toLowerCase();
+const indexerEnabled = process.env.INDEXER_ENABLED === 'true';
+
+import pkg from '../../package.json';
+const version = pkg.version;
+---
+
+<!doctype html>
+<html lang="en" class="h-full bg-gray-950">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mojito Max: {title}</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+    />
+  </head>
+
+  <body class="h-full text-gray-100 font-sans" data-network={network}>
+    <ToastContainer client:load />
+    <div class="min-h-full flex flex-col">
+      <!-- Top bar -->
+      <header class="border-b border-gray-800 bg-gray-900">
+        <div class="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+          <div class="flex h-14 items-center justify-between">
+            <!-- Logo -->
+            <a href="/" class="flex items-center gap-2 font-semibold text-lg">
+              <img src="/mintlayer-logo.svg" alt="Mintlayer" class="h-5 shrink-0 brightness-0 invert" />
+              <span class="text-mint-400">Mojito Max</span>
+            </a>
+
+            <!-- Nav links -->
+            <nav class="flex items-center gap-1">
+              {[
+                { href: '/',                   label: 'Dashboard',        key: 'dashboard',        always: true  },
+                { href: '/staking',            label: 'Staking',          key: 'staking',          always: true  },
+                { href: '/balances',           label: 'Balances',         key: 'balances',         always: true  },
+                { href: '/token-management',   label: 'Token Management', key: 'token-management', always: false },
+                { href: '/trading',            label: 'Trading',          key: 'trading',          always: false },
+                { href: '/management',         label: 'Management',       key: 'management',       always: true  },
+              ].filter(({ always }) => always || indexerEnabled).map(({ href, label, key }) => (
+                <a
+                  href={href}
+                  class:list={[
+                    'px-3 py-1.5 rounded text-sm transition-colors',
+                    activeNav === key
+                      ? 'bg-mint-600 text-white'
+                      : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800',
+                  ]}
+                >
+                  {label}
+                </a>
+              ))}
+              <form method="post" action="/api/logout" class="ml-2 pl-2 border-l border-gray-800">
+                <button
+                  type="submit"
+                  class="px-3 py-1.5 rounded text-sm text-gray-500 hover:text-gray-100 hover:bg-gray-800 transition-colors"
+                >
+                  Sign out
+                </button>
+              </form>
+            </nav>
+          </div>
+        </div>
+      </header>
+
+      <!-- Page content -->
+      <main class="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-8 py-8">
+        <slot />
+      </main>
+
+      <!-- Footer -->
+      <footer class="border-t border-gray-800 py-4 text-center text-xs text-gray-600">
+        Mojito Max v{version} &mdash;
+        <a href="https://www.mintlayer.org" target="_blank" rel="noopener"
+           class="text-gray-500 hover:text-gray-400 transition-colors">mintlayer.org</a>
+      </footer>
+    </div>
+  </body>
+  <script>
+    document.body.addEventListener('click', (e) => {
+      const btn = (e.target as Element).closest<HTMLElement>('[data-copy-value]');
+      if (!btn) return;
+      navigator.clipboard.writeText(btn.dataset.copyValue ?? '').then(() => {
+        btn.classList.add('text-mint-400');
+        setTimeout(() => btn.classList.remove('text-mint-400'), 1500);
+      });
+    });
+  </script>
+</html>

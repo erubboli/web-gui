@@ -1,0 +1,113 @@
+---
+import ManagementLayout from '@/layouts/ManagementLayout.astro';
+import { listUtxos, WalletRpcError, type UtxoEntry, type UtxoOutput } from '@/lib/wallet-rpc';
+
+let utxos: UtxoEntry[] = [];
+let error: string | null = null;
+
+try {
+  utxos = await listUtxos(0);
+} catch (err) {
+  error = err instanceof WalletRpcError ? err.message : (err as Error).message;
+}
+
+function getOutpointId(utxo: UtxoEntry): string {
+  const src = utxo.outpoint.source_id;
+  if (src.type === 'Transaction') return src.content.tx_id;
+  return src.content.block_id;
+}
+
+function truncateId(id: string) {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-8)}` : id;
+}
+
+function getOutputValue(output: UtxoOutput): string {
+  if (output.type === 'Transfer' || output.type === 'LockThenTransfer') {
+    const content = (output as any).content;
+    const value = content.value;
+    if (value.type === 'Coin') return `${value.content.amount.decimal} ML`;
+    if (value.type === 'Token') return `${value.content.amount.decimal} (token ${truncateId(value.content.id)})`;
+  }
+  return output.type;
+}
+
+function isLocked(output: UtxoOutput): boolean {
+  return output.type === 'LockThenTransfer';
+}
+---
+
+<ManagementLayout title="UTXOs" activeTab="utxos">
+  <h1 class="text-2xl font-bold text-gray-100 mb-6">UTXOs</h1>
+
+  {error && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 text-red-300 text-sm mb-6">
+      <strong class="font-semibold">Error loading UTXOs:</strong> {error}
+    </div>
+  )}
+
+  {!error && utxos.length === 0 && (
+    <p class="text-gray-500 text-sm">No unspent outputs found.</p>
+  )}
+
+  {!error && utxos.length > 0 && (
+    <div>
+      <p class="text-xs text-gray-500 mb-3">{utxos.length} unspent output{utxos.length !== 1 ? 's' : ''}</p>
+      <div class="overflow-x-auto rounded-xl border border-gray-800">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-800 bg-gray-900/60 text-left text-xs text-gray-500 uppercase tracking-wider">
+              <th class="px-4 py-3">Outpoint</th>
+              <th class="px-4 py-3">Type</th>
+              <th class="px-4 py-3 text-right">Value</th>
+              <th class="px-4 py-3 text-right">Lock</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800/60">
+            {utxos.map((utxo) => {
+              const id = getOutpointId(utxo);
+              return (
+                <tr class="bg-gray-900 hover:bg-gray-800/60 transition-colors">
+                  <td class="px-4 py-3 font-mono text-xs text-gray-300">
+                    <span title={id}>{truncateId(id)}</span>
+                    <span class="text-gray-600">:{utxo.outpoint.index}</span>
+                    <button
+                      type="button"
+                      class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                      data-copy-value={`${id}:${utxo.outpoint.index}`}
+                      title="Copy outpoint"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                      </svg>
+                    </button>
+                    <div class="text-gray-600 text-xs mt-0.5">{utxo.outpoint.source_id.type}</div>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-gray-800 text-gray-400">
+                      {utxo.output.type}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono text-gray-300 text-xs">
+                    {getOutputValue(utxo.output)}
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    {isLocked(utxo.output) ? (
+                      <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-orange-900/40 text-orange-400">
+                        Locked
+                      </span>
+                    ) : (
+                      <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-mint-900/30 text-mint-500">
+                        Free
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+</ManagementLayout>

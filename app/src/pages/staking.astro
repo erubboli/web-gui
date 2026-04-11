@@ -1,0 +1,228 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import StakingControl from '@/components/StakingControl';
+import DelegationPanel from '@/components/DelegationPanel';
+import { CreatePoolModal, DecommissionButton } from '@/components/PoolActions';
+import {
+  getStakingStatus, listPools, listCreatedBlocks, listDelegations,
+  newAddress, showAddresses,
+  type PoolInfo, type CreatedBlock, type DelegationInfo,
+} from '@/lib/wallet-rpc';
+
+// ── Fetch page data ───────────────────────────────────────────────────────────
+let stakingStatus: 'Staking' | 'NotStaking' = 'NotStaking';
+let pools: PoolInfo[]            = [];
+let createdBlocks: CreatedBlock[]= [];
+let delegations: DelegationInfo[]= [];
+let decommAddress                = '';
+let loadError: string | null     = null;
+
+try {
+  [stakingStatus, pools, createdBlocks, delegations] = await Promise.all([
+    getStakingStatus(0),
+    listPools(0),
+    listCreatedBlocks(0),
+    listDelegations(0),
+  ]);
+  const addresses = await showAddresses(0, false);
+  const unusedAddr = addresses.find(a => a.purpose === 'Receive' && !a.used);
+  decommAddress = unusedAddr
+    ? unusedAddr.address
+    : (await newAddress(0)).address;
+} catch (err) {
+  loadError = (err as Error).message;
+}
+
+// Both staking_list_pools and staking_list_created_block_ids encode pool_id via
+// Address::new(chain_config, pool_id).to_string() — same bech32 format, safe to group.
+const blocksByPool = createdBlocks.reduce<Record<string, typeof createdBlocks>>((acc, b) => {
+  (acc[b.pool_id] ??= []).push(b);
+  return acc;
+}, {});
+
+const network     = (process.env.NETWORK ?? 'mainnet').toLowerCase();
+const explorerBase = network === 'testnet'
+  ? 'https://lovelace.explorer.mintlayer.org'
+  : 'https://explorer.mintlayer.org';
+
+// Group delegations by pool_id
+const delegationsByPool = delegations.reduce<Record<string, DelegationInfo[]>>((acc, d) => {
+  (acc[d.pool_id] ??= []).push(d);
+  return acc;
+}, {});
+---
+
+<Layout title="Staking" activeNav="staking">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-gray-100">Staking</h1>
+    {!loadError && (
+      <StakingControl client:load initialStatus={stakingStatus} />
+    )}
+  </div>
+
+  {loadError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 mb-6 text-red-300 text-sm">
+      <strong>Error loading staking data:</strong> {loadError}
+    </div>
+  )}
+
+  <!-- ── My Pools ──────────────────────────────────────────────────────────── -->
+  <section class="mb-8">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-base font-semibold text-gray-200">My Pools</h2>
+      <CreatePoolModal client:load initialDecommissionAddress={decommAddress} />
+    </div>
+
+    {pools.length === 0 ? (
+      <p class="text-sm text-gray-500">No staking pools yet. Use the Create Pool button above.</p>
+    ) : (
+      <div class="space-y-4">
+        {pools.map((pool) => {
+          const poolBlocks  = blocksByPool[pool.pool_id] ?? [];
+          const latestBlock = poolBlocks.length > 0 ? poolBlocks[poolBlocks.length - 1] : null;
+          const poolDelegs  = delegationsByPool[pool.pool_id] ?? [];
+          const totalDelegs = poolDelegs.reduce((sum, d) => sum + parseFloat(d.balance.decimal), 0);
+
+          return (
+            <div class="rounded-xl bg-gray-900 border border-gray-800 p-5">
+              <!-- Pool header -->
+              <div class="flex items-start justify-between gap-4 mb-4">
+                <div class="min-w-0">
+                  <p class="text-xs text-gray-500 uppercase tracking-wider mb-0.5">Pool ID</p>
+                  <span class="inline-flex items-center gap-1 flex-wrap">
+                    <a href={`${explorerBase}/pool/${pool.pool_id}`} target="_blank" rel="noopener"
+                       class="font-mono text-xs text-mint-400 hover:text-mint-300 break-all transition-colors">
+                      {pool.pool_id}
+                    </a>
+                    <button type="button"
+                      class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors shrink-0"
+                      data-copy-value={pool.pool_id} title="Copy pool ID">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                      </svg>
+                    </button>
+                  </span>
+                </div>
+                <!-- Decommission -->
+                <DecommissionButton client:load poolId={pool.pool_id} />
+              </div>
+
+              <!-- Pool stats -->
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <p class="text-xs text-gray-500 mb-0.5">Pledge</p>
+                  <p class="font-mono text-sm text-gray-200">{pool.pledge.decimal} <span class="text-gray-500 text-xs">ML</span></p>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 mb-0.5">Total Balance</p>
+                  <p class="font-mono text-sm text-gray-200">{pool.balance.decimal} <span class="text-gray-500 text-xs">ML</span></p>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 mb-0.5">Margin</p>
+                  <p class="font-mono text-sm text-gray-200">{parseFloat(pool.margin_ratio_per_thousand).toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 mb-0.5">Cost / Block</p>
+                  <p class="font-mono text-sm text-gray-200">{pool.cost_per_block.decimal} <span class="text-gray-500 text-xs">ML</span></p>
+                </div>
+              </div>
+
+              <!-- Blocks & delegations -->
+              <div class="grid grid-cols-2 gap-4 border-t border-gray-800 pt-4">
+                <div>
+                  <p class="text-xs text-gray-500 mb-1">Blocks Found</p>
+                  <p class="text-2xl font-bold text-mint-400 font-mono">{poolBlocks.length}</p>
+                  {latestBlock && (
+                    <p class="text-xs text-gray-500 mt-0.5">Latest: #{latestBlock.height.toLocaleString()}</p>
+                  )}
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 mb-1">Delegations</p>
+                  <p class="text-2xl font-bold text-gray-200 font-mono">{poolDelegs.length}</p>
+                  {poolDelegs.length > 0 && (
+                    <p class="text-xs text-gray-500 mt-0.5">{totalDelegs.toFixed(2)} ML total</p>
+                  )}
+                </div>
+              </div>
+
+              <!-- Delegation management (React island) -->
+              <DelegationPanel
+                client:load
+                poolId={pool.pool_id}
+                initialDelegations={poolDelegs}
+                network={network}
+              />
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </section>
+
+  <!-- ── Created Blocks ────────────────────────────────────────────────────── -->
+  {createdBlocks.length > 0 && (
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-3">
+        Blocks Found
+        <span class="ml-2 text-mint-400 font-mono text-sm">{createdBlocks.length}</span>
+      </h2>
+      <div class="overflow-x-auto rounded-xl border border-gray-800">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-800 bg-gray-900/60 text-left text-xs text-gray-500 uppercase tracking-wider">
+              <th class="px-4 py-3">Height</th>
+              <th class="px-4 py-3">Block ID</th>
+              <th class="px-4 py-3">Pool</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800/60">
+            {[...createdBlocks].reverse().slice(0, 50).map(b => (
+              <tr class="bg-gray-900 hover:bg-gray-800/60 transition-colors">
+                <td class="px-4 py-2.5 font-mono text-gray-300">#{b.height.toLocaleString()}</td>
+                <td class="px-4 py-2.5 font-mono text-xs text-gray-500 break-all">
+                  {b.id}
+                  <button type="button"
+                    class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                    data-copy-value={b.id} title="Copy block ID">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                  </button>
+                </td>
+                <td class="px-4 py-2.5 font-mono text-xs text-gray-500 break-all">
+                  {b.pool_id}
+                  <button type="button"
+                    class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                    data-copy-value={b.pool_id} title="Copy pool ID">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {createdBlocks.length > 50 && (
+          <p class="text-xs text-gray-600 px-4 py-2">Showing 50 most recent of {createdBlocks.length} blocks.</p>
+        )}
+      </div>
+    </section>
+  )}
+
+  <!-- ── About staking ─────────────────────────────────────────────────────── -->
+  <section>
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-6">
+      <h2 class="text-base font-semibold text-gray-200 mb-3">About staking</h2>
+      <ul class="space-y-2 text-sm text-gray-400 list-disc list-inside">
+        <li>Staking requires at least <strong class="text-gray-300">40,000 ML</strong> to create a pool.</li>
+        <li>The wallet must remain online and connected to the node.</li>
+        <li>To start staking, create a pool then press <strong class="text-gray-300">Start</strong> above.</li>
+        <li>Staking rewards are collected automatically into your wallet.</li>
+      </ul>
+    </div>
+  </section>
+</Layout>

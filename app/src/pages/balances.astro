@@ -1,0 +1,450 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import ReceiveModal from '@/components/ReceiveModal';
+import { getBalance, getTokensInfo, type TokenInfo } from '@/lib/wallet-rpc';
+import { hexToText } from '@/lib/token-utils';
+import { INDEXER_START_CMD } from '@/lib/indexer';
+
+let mlBalance: string | null = null;
+let tokenBalances: Record<string, { atoms: string; decimal: string }> = {};
+let tokenInfos: Map<string, TokenInfo> = new Map();
+let loadError: string | null = null;
+
+try {
+  const balance = await getBalance(0);
+  mlBalance = balance.coins.decimal;
+  tokenBalances = balance.tokens ?? {};
+
+  const tokenIds = Object.keys(tokenBalances);
+  if (tokenIds.length > 0) {
+    const results = await Promise.all(
+      tokenIds.map(id => getTokensInfo([id]).then(([info]) => ({ id, info: info ?? null })))
+    );
+    for (const { id, info } of results) {
+      if (info) tokenInfos.set(id, info);
+    }
+  }
+} catch (err) {
+  loadError = (err as Error).message;
+}
+
+const tokenEntries = Object.entries(tokenBalances);
+const network = (process.env.NETWORK ?? 'mainnet').toLowerCase();
+
+function midId(id: string) {
+  return id.length > 16 ? `${id.slice(0, 7)}…${id.slice(-7)}` : id;
+}
+
+function tokenTicker(info: TokenInfo | undefined): string {
+  if (!info) return '???';
+  if (info.type === 'FungibleToken') return hexToText(info.content.token_ticker) ?? '???';
+  return hexToText(info.content.metadata.ticker) ?? hexToText(info.content.metadata.name) ?? 'NFT';
+}
+
+function isNFT(info: TokenInfo | undefined): boolean {
+  return info?.type === 'NonFungibleToken';
+}
+
+function nftIconUrl(info: TokenInfo | undefined): string | null {
+  if (info?.type !== 'NonFungibleToken') return null;
+  return hexToText(info.content.metadata.icon_uri) ?? null;
+}
+---
+
+<Layout title="Balances" activeNav="balances">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-gray-100">Balances</h1>
+    <ReceiveModal client:load />
+  </div>
+
+  <div id="indexer-warning" style="display:none"
+       class="rounded-lg border border-amber-700 bg-amber-900/20 p-4 mb-6 text-amber-300 text-sm">
+    <strong class="block mb-1">Indexer not running</strong>
+    Token information may be incomplete.
+    Start it with:
+    <code class="block mt-2 rounded bg-gray-900 px-3 py-1.5 text-xs text-gray-300 font-mono">{INDEXER_START_CMD}</code>
+  </div>
+
+  <div id="indexer-syncing" style="display:none"
+       class="rounded-lg border border-yellow-700 bg-yellow-900/20 p-4 mb-6 text-yellow-300 text-sm">
+    <strong class="block mb-1">Indexer still syncing</strong>
+    Token information may not be complete until the indexer catches up.
+  </div>
+
+  {loadError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 mb-6 text-red-300 text-sm">
+      <strong>Error loading balances:</strong> {loadError}
+    </div>
+  )}
+
+  <!-- ── Asset list ────────────────────────────────────────────────────────── -->
+  <div class="rounded-xl border border-gray-800 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 bg-gray-900/60 text-left text-xs text-gray-500 uppercase tracking-wider">
+          <th class="px-4 py-3">Asset</th>
+          <th class="px-4 py-3 hidden sm:table-cell">Token ID</th>
+          <th class="px-4 py-3 text-right">Balance</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800/60">
+
+        <!-- ML row -->
+        <tr class="bg-gray-900 hover:bg-gray-800/40 transition-colors">
+          <td class="px-4 py-3">
+            <span class="inline-flex items-center gap-2">
+              <span class="w-8 h-8 rounded-full bg-mint-900/50 border border-mint-800 flex items-center justify-center shrink-0">
+                <span class="text-xs font-bold text-mint-400">ML</span>
+              </span>
+              <span class="font-semibold text-gray-200">Mintlayer</span>
+            </span>
+          </td>
+          <td class="px-4 py-3 hidden sm:table-cell">
+            <span class="text-xs text-gray-600">native coin</span>
+          </td>
+          <td class="px-4 py-3 text-right font-mono text-gray-200">
+            {mlBalance !== null ? (
+              <span>{mlBalance} <span class="text-gray-500 text-xs">ML</span></span>
+            ) : (
+              <span class="text-gray-600">—</span>
+            )}
+          </td>
+          <td class="px-4 py-3 text-right">
+            <button type="button"
+              class="send-btn rounded-lg bg-gray-800 hover:bg-mint-700 border border-gray-700 hover:border-mint-600
+                     px-3 py-1.5 text-xs font-semibold text-gray-300 hover:text-white transition-colors"
+              data-asset-type="ml"
+              data-asset-ticker="ML"
+              data-asset-id="">
+              Send
+            </button>
+          </td>
+        </tr>
+
+        <!-- Token rows -->
+        {tokenEntries.map(([tokenId, bal]) => {
+          const info = tokenInfos.get(tokenId);
+          const ticker = tokenTicker(info);
+          const nft = isNFT(info);
+          const iconUrl = nftIconUrl(info);
+          const explorerBase = network === 'testnet'
+            ? 'https://lovelace.explorer.mintlayer.org'
+            : 'https://explorer.mintlayer.org';
+
+          return (
+            <tr class="bg-gray-900 hover:bg-gray-800/40 transition-colors">
+              <td class="px-4 py-3">
+                <span class="inline-flex items-center gap-2">
+                  {iconUrl ? (
+                    <img src={iconUrl} alt={ticker} width="32" height="32"
+                         class="rounded-full object-cover shrink-0 border border-gray-700" />
+                  ) : (
+                    <span class="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0">
+                      <span class="text-xs font-bold text-gray-400">{ticker.slice(0, 2)}</span>
+                    </span>
+                  )}
+                  <span class="font-semibold text-gray-200">{ticker}</span>
+                  <span class="relative group/info inline-flex items-center">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         class="text-gray-600 group-hover/info:text-gray-400 transition-colors cursor-default shrink-0"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="16" x2="12" y2="12"/>
+                      <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <span class="pointer-events-none absolute bottom-full left-0 mb-2 z-20
+                                 w-max rounded-lg bg-gray-950 border border-gray-700 px-3 py-2 shadow-2xl
+                                 opacity-0 group-hover/info:opacity-100 transition-opacity">
+                      <span class="block text-gray-500 text-xs mb-0.5">Token ID</span>
+                      <span class="block font-mono text-xs text-gray-200 whitespace-nowrap">{midId(tokenId)}</span>
+                    </span>
+                  </span>
+                  {nft && (
+                    <span class="text-xs bg-purple-900/40 text-purple-300 border border-purple-800 rounded px-1.5 py-0.5">NFT</span>
+                  )}
+                  {!nft && info?.type === 'FungibleToken' && info.content.frozen?.type === 'Frozen' && (
+                    <span class="text-xs bg-blue-900/40 text-blue-300 border border-blue-800 rounded px-1.5 py-0.5">frozen</span>
+                  )}
+                  {!nft && info?.type === 'FungibleToken' && info.content.is_locked && (
+                    <span class="text-xs bg-amber-900/40 text-amber-300 border border-amber-800 rounded px-1.5 py-0.5">locked</span>
+                  )}
+                </span>
+              </td>
+              <td class="px-4 py-3 hidden sm:table-cell">
+                <span class="inline-flex items-center gap-1">
+                  <a href={`${explorerBase}/token/${tokenId}`} target="_blank" rel="noopener"
+                     class="font-mono text-xs text-mint-400 hover:text-mint-300 transition-colors">
+                    {tokenId.slice(0, 12)}…{tokenId.slice(-6)}
+                  </a>
+                  <button type="button"
+                    class="inline-flex items-center text-gray-600 hover:text-mint-400 transition-colors"
+                    data-copy-value={tokenId} title="Copy token ID">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                  </button>
+                </span>
+              </td>
+              <td class="px-4 py-3 text-right font-mono text-gray-200">
+                <span class="inline-flex items-center justify-end gap-1">
+                  {bal.decimal}
+                  <span class="text-gray-500 text-xs">{ticker}</span>
+                  <span class="relative group/balinfo inline-flex items-center">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         class="text-gray-600 group-hover/balinfo:text-gray-400 transition-colors cursor-default shrink-0"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="16" x2="12" y2="12"/>
+                      <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <span class="pointer-events-none absolute bottom-full right-0 mb-2 z-20
+                                 w-max rounded-lg bg-gray-950 border border-gray-700 px-3 py-2 shadow-2xl
+                                 opacity-0 group-hover/balinfo:opacity-100 transition-opacity">
+                      <span class="block text-gray-500 text-xs mb-0.5">Token ID</span>
+                      <span class="block font-mono text-xs text-gray-200 whitespace-nowrap">{midId(tokenId)}</span>
+                    </span>
+                  </span>
+                </span>
+              </td>
+              <td class="px-4 py-3 text-right">
+                <button type="button"
+                  class="send-btn rounded-lg bg-gray-800 hover:bg-mint-700 border border-gray-700 hover:border-mint-600
+                         px-3 py-1.5 text-xs font-semibold text-gray-300 hover:text-white transition-colors"
+                  data-asset-type="token"
+                  data-asset-ticker={ticker}
+                  data-asset-id={tokenId}
+                  data-asset-nft={nft ? "true" : "false"}>
+                  Send
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Send modal ────────────────────────────────────────────────────────── -->
+  <div id="send-modal"
+       class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="relative bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+      <div class="flex items-center justify-between mb-5">
+        <h2 id="send-modal-title" class="text-base font-semibold text-gray-100">Send</h2>
+        <button id="send-modal-close"
+          class="text-gray-500 hover:text-gray-300 transition-colors" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label for="send-address" class="block text-sm font-medium text-gray-300 mb-1.5">
+            Recipient address
+          </label>
+          <input id="send-address" type="text" placeholder="mtc1…" autocomplete="off"
+            class="w-full rounded-lg bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600
+                   px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-mint-600" />
+        </div>
+
+        <div id="send-amount-row">
+          <label for="send-amount" class="block text-sm font-medium text-gray-300 mb-1.5">
+            Amount
+          </label>
+          <div class="relative">
+            <input id="send-amount" type="text" placeholder="0.00" inputmode="decimal"
+              pattern="[0-9]*\.?[0-9]*" autocomplete="off"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600
+                     px-3 py-2 pr-16 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-mint-600" />
+            <span id="send-ticker"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 pointer-events-none font-mono">
+              ML
+            </span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1">Network fees are calculated automatically.</p>
+        </div>
+
+        <div id="send-result" class="hidden rounded-lg border border-mint-700 bg-mint-900/30 p-4">
+          <p class="text-mint-400 font-semibold text-sm mb-1">Transaction submitted!</p>
+          <p class="text-xs text-gray-500 mb-0.5">Transaction ID</p>
+          <span class="inline-flex items-center gap-1 flex-wrap">
+            <span id="send-txid" class="font-mono text-xs text-mint-300 break-all"></span>
+            <button type="button" id="send-txid-copy"
+              class="ml-1.5 inline-flex items-center text-gray-600 hover:text-mint-400 transition-colors shrink-0"
+              title="Copy transaction ID">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+            </button>
+          </span>
+        </div>
+
+        <div id="send-error"
+          class="hidden rounded-lg border border-red-700 bg-red-900/30 p-3 text-red-300 text-sm">
+        </div>
+
+        <button id="send-submit"
+          class="w-full rounded-lg bg-mint-700 hover:bg-mint-600 px-4 py-2.5 text-sm font-semibold
+                 text-white transition-colors disabled:opacity-50">
+          Send
+        </button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script>
+import { watchTx } from '@/lib/txWatcher';
+import { submitWithToast } from '@/lib/toastStore';
+
+// ── Indexer status ────────────────────────────────────────────────────────────
+fetch('/api/indexer-status')
+  .then(r => r.json())
+  .then((data: { up: boolean; synced: boolean }) => {
+    if (!data.up) {
+      const el = document.getElementById('indexer-warning');
+      if (el) el.style.display = '';
+    } else if (!data.synced) {
+      const el = document.getElementById('indexer-syncing');
+      if (el) el.style.display = '';
+    }
+  })
+  .catch(() => {});
+
+// ── RPC helper ────────────────────────────────────────────────────────────────
+async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  const res = await fetch('/api/rpc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, params }),
+  });
+  const data = await res.json() as { ok: boolean; result?: T; error?: { message: string } };
+  if (!data.ok) throw new Error(data.error?.message ?? 'RPC error');
+  return data.result as T;
+}
+
+// ── Send modal state ──────────────────────────────────────────────────────────
+let activeAssetType: 'ml' | 'token' = 'ml';
+let activeAssetId = '';
+let activeIsNft   = false;
+
+const modal      = document.getElementById('send-modal')!;
+const modalTitle = document.getElementById('send-modal-title')!;
+const tickerEl   = document.getElementById('send-ticker')!;
+const amtRow     = document.getElementById('send-amount-row')!;
+const addrInput  = document.getElementById('send-address') as HTMLInputElement;
+const amtInput   = document.getElementById('send-amount')  as HTMLInputElement;
+const errBox     = document.getElementById('send-error')!;
+const resultBox  = document.getElementById('send-result')!;
+const txidEl     = document.getElementById('send-txid')!;
+const submitBtn  = document.getElementById('send-submit') as HTMLButtonElement;
+
+function openSendModal(assetType: 'ml' | 'token', assetId: string, ticker: string, isNft: boolean) {
+  activeAssetType = assetType;
+  activeAssetId   = assetId;
+  activeIsNft     = isNft;
+
+  modalTitle.textContent = `Send ${ticker}`;
+  tickerEl.textContent   = ticker;
+  addrInput.value        = '';
+  amtInput.value         = '';
+  errBox.textContent     = '';
+  errBox.classList.add('hidden');
+  resultBox.classList.add('hidden');
+  submitBtn.disabled    = false;
+  submitBtn.textContent = `Send ${ticker}`;
+
+  // NFTs: hide amount field (amount is always 1)
+  amtRow.style.display = isNft ? 'none' : '';
+
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  addrInput.focus();
+}
+
+function closeModal() {
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+// Open on Send button click
+document.querySelectorAll<HTMLButtonElement>('.send-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    openSendModal(
+      btn.dataset.assetType as 'ml' | 'token',
+      btn.dataset.assetId ?? '',
+      btn.dataset.assetTicker ?? '',
+      btn.dataset.assetNft === 'true',
+    );
+  });
+});
+
+// Close modal
+document.getElementById('send-modal-close')!.addEventListener('click', closeModal);
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// Copy tx ID
+document.getElementById('send-txid-copy')!.addEventListener('click', () => {
+  navigator.clipboard.writeText(txidEl.textContent ?? '');
+});
+
+// Submit
+submitBtn.addEventListener('click', async () => {
+  const address = addrInput.value.trim();
+  const amount  = activeIsNft ? '1' : amtInput.value.trim();
+
+  if (!address || (!activeIsNft && !amount)) {
+    errBox.textContent = 'Address and amount are required.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  errBox.classList.add('hidden');
+  resultBox.classList.add('hidden');
+  submitBtn.disabled    = true;
+  submitBtn.textContent = 'Submitting…';
+
+  try {
+    await submitWithToast(
+      async () => {
+        let txId: string;
+        if (activeAssetType === 'ml') {
+          const res = await rpc<{ tx_id: string }>('address_send', {
+            account: 0,
+            address,
+            amount: { decimal: amount },
+            selected_utxos: [],
+            options: {},
+          });
+          txId = res.tx_id;
+        } else {
+          const res = await rpc<{ tx_id: string }>('token_send', {
+            account: 0,
+            token_id: activeAssetId,
+            address,
+            amount: { decimal: amount },
+            options: {},
+          });
+          txId = res.tx_id;
+        }
+        return txId;
+      },
+      watchTx,
+    );
+
+    closeModal();
+  } catch (err) {
+    errBox.textContent = (err as Error).message;
+    errBox.classList.remove('hidden');
+    submitBtn.disabled    = false;
+    submitBtn.textContent = `Send`;
+  }
+});
+</script>

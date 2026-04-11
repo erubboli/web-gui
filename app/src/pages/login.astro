@@ -1,0 +1,156 @@
+---
+import '@/styles/global.css';
+import {
+  verifyPassword,
+  verifyTOTP,
+  generateSessionToken,
+  makeSessionCookieHeader,
+  checkLoginRateLimit,
+  recordLoginFailure,
+  SESSION_COOKIE_NAME,
+  verifySessionToken,
+} from '@/lib/auth';
+
+// If already authenticated, go home
+const existingToken = Astro.cookies.get(SESSION_COOKIE_NAME)?.value ?? '';
+if (verifySessionToken(existingToken)) {
+  return Astro.redirect('/', 302);
+}
+
+// Fail-safe: ensure auth is configured
+const passwordHash = process.env.UI_PASSWORD_HASH ?? '';
+const totpSecret   = process.env.UI_TOTP_SECRET   ?? '';
+const unconfigured = !passwordHash || !totpSecret;
+
+let errorMessage: string | null = null;
+
+if (Astro.request.method === 'POST' && !unconfigured) {
+  const ip =
+    Astro.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    (Astro.clientAddress as string | undefined) ??
+    'unknown';
+
+  if (!checkLoginRateLimit(ip)) {
+    errorMessage = 'Too many login attempts. Try again in 15 minutes.';
+  } else {
+    const form = await Astro.request.formData();
+    const password  = (form.get('password')  as string | null) ?? '';
+    const totpCode  = (form.get('totp_code') as string | null) ?? '';
+
+    // Always evaluate both factors to avoid timing side-channels
+    const [passwordOk, totpOk] = await Promise.all([
+      verifyPassword(password, passwordHash),
+      Promise.resolve(verifyTOTP(totpCode, totpSecret)),
+    ]);
+
+    if (passwordOk && totpOk) {
+      const token = generateSessionToken();
+      // Redirect to original destination if provided
+      const nextParam = new URL(Astro.request.url).searchParams.get('next') ?? '/';
+      const safeDest = nextParam.startsWith('/') && !nextParam.startsWith('//') ? nextParam : '/';
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: safeDest,
+          'Set-Cookie': makeSessionCookieHeader(token),
+        },
+      });
+    } else {
+      recordLoginFailure(ip);
+      // Artificial delay to slow brute-force before lockout kicks in
+      await new Promise((r) => setTimeout(r, 500));
+      errorMessage = 'Invalid credentials.';
+    }
+  }
+}
+---
+
+<!doctype html>
+<html lang="en" class="h-full bg-gray-950">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mojito Max — Sign In</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  </head>
+
+  <body class="h-full flex items-center justify-center text-gray-100 font-sans">
+    <div class="w-full max-w-sm px-4">
+
+      <!-- Logo / branding -->
+      <div class="flex flex-col items-center mb-8 gap-3">
+        <img src="/mintlayer-logo.svg" alt="Mintlayer" class="h-7 brightness-0 invert" />
+        <span class="text-mint-400 text-xl font-semibold tracking-tight">Mojito Max</span>
+        <p class="text-gray-500 text-sm">Sign in to your wallet</p>
+      </div>
+
+      {unconfigured && (
+        <div class="mb-4 px-4 py-3 rounded-lg border border-amber-800 bg-amber-950/50 text-amber-300 text-sm">
+          Authentication is not configured. Run <code class="font-mono">./init.sh</code> to set up a password and 2FA.
+        </div>
+      )}
+
+      {errorMessage && (
+        <div class="mb-4 px-4 py-3 rounded-lg border border-red-800 bg-red-950/50 text-red-300 text-sm">
+          {errorMessage}
+        </div>
+      )}
+
+      <form
+        method="post"
+        class="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl space-y-4"
+      >
+        <div>
+          <label for="password" class="block text-sm font-medium text-gray-400 mb-1.5">
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            required
+            autocomplete="current-password"
+            disabled={unconfigured}
+            class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-100
+                   placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-mint-600
+                   focus:border-transparent transition disabled:opacity-40 disabled:cursor-not-allowed"
+          />
+        </div>
+
+        <div>
+          <label for="totp_code" class="block text-sm font-medium text-gray-400 mb-1.5">
+            Authenticator Code
+          </label>
+          <input
+            id="totp_code"
+            name="totp_code"
+            type="text"
+            required
+            inputmode="numeric"
+            maxlength="6"
+            autocomplete="one-time-code"
+            pattern="[0-9]{6}"
+            placeholder="000000"
+            disabled={unconfigured}
+            class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-100
+                   placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-mint-600
+                   focus:border-transparent tracking-[0.4em] text-center font-mono transition
+                   disabled:opacity-40 disabled:cursor-not-allowed"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={unconfigured}
+          class="w-full py-2.5 px-4 rounded-lg bg-mint-600 hover:bg-mint-700 text-white font-medium
+                 transition-colors focus:outline-none focus:ring-2 focus:ring-mint-500
+                 focus:ring-offset-2 focus:ring-offset-gray-900
+                 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-mint-600"
+        >
+          Sign in
+        </button>
+      </form>
+
+    </div>
+  </body>
+</html>

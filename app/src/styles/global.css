@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 4%;         /* gray-950 to match the app */
+    --primary: 142 76% 36%;        /* mint-600 */
+    --primary-foreground: 0 0% 100%;
+  }
+}

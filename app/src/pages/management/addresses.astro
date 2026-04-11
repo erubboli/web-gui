@@ -1,0 +1,239 @@
+---
+import ManagementLayout from '@/layouts/ManagementLayout.astro';
+import { showAddresses, newAddress, WalletRpcError, type AddressEntry } from '@/lib/wallet-rpc';
+
+let addresses: AddressEntry[] = [];
+let error: string | null = null;
+let newAddrResult: string | null = null;
+let newAddrError: string | null = null;
+
+// Handle "Generate new address" form submission
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action');
+  if (action === 'new_address') {
+    try {
+      const result = await newAddress(0);
+      newAddrResult = result.address;
+    } catch (err) {
+      newAddrError = (err as Error).message;
+    }
+  }
+}
+
+// Fetch current address list (include change addresses — funds often land there)
+try {
+  addresses = await showAddresses(0, true);
+} catch (err) {
+  if (err instanceof WalletRpcError) {
+    error = err.message;
+  } else {
+    error = (err as Error).message;
+  }
+}
+---
+
+<ManagementLayout title="Addresses" activeTab="addresses">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-gray-100">Addresses</h1>
+
+    <!-- Generate new address button (submits form) -->
+    <form method="POST">
+      <input type="hidden" name="action" value="new_address" />
+      <button
+        type="submit"
+        class="rounded-lg bg-mint-700 hover:bg-mint-600 px-4 py-2 text-sm text-white font-medium transition-colors"
+      >
+        + New Address
+      </button>
+    </form>
+  </div>
+
+  <!-- Newly generated address banner -->
+  {newAddrResult && (
+    <div class="rounded-lg border border-mint-700 bg-mint-900/30 p-4 mb-5">
+      <p class="text-xs text-mint-400 uppercase tracking-wider mb-1">New address generated</p>
+      <p class="font-mono text-sm text-mint-300 break-all">{newAddrResult}</p>
+    </div>
+  )}
+
+  {newAddrError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-3 mb-5 text-red-300 text-sm">
+      {newAddrError}
+    </div>
+  )}
+
+  {error && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 text-red-300 text-sm">
+      <strong class="font-semibold">Error loading addresses:</strong> {error}
+    </div>
+  )}
+
+  <!-- Address table -->
+  {!error && addresses.length === 0 && (
+    <p class="text-gray-500 text-sm">No addresses yet. Generate your first one above.</p>
+  )}
+
+  {!error && addresses.length > 0 && (
+    <div class="mb-3 flex items-center gap-2">
+      <label class="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-400">
+        <input id="show-zero" type="checkbox" class="rounded accent-mint-500" />
+        Show empty addresses
+      </label>
+    </div>
+  )}
+
+  {!error && addresses.length > 0 && (
+    <div class="overflow-x-auto rounded-xl border border-gray-800">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-800 bg-gray-900/60 text-left text-xs text-gray-500 uppercase tracking-wider">
+            <th class="px-4 py-3 w-12">#</th>
+            <th class="px-4 py-3">Address</th>
+            <th class="px-4 py-3 text-right">Status</th>
+            <th class="px-4 py-3 text-right">Holdings</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800/60">
+          {addresses.map((addr) => (
+            <tr class="bg-gray-900 hover:bg-gray-800/60 transition-colors"
+                data-address={addr.address}
+                data-zero={addr.coins.decimal === '0' ? 'true' : undefined}>
+              <td class="px-4 py-3 text-gray-500 font-mono">{addr.index}</td>
+              <td class="px-4 py-3 font-mono text-xs text-gray-300 break-all max-w-xs">
+                {addr.address}
+                <button
+                  type="button"
+                  class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                  data-copy-value={addr.address}
+                  title="Copy address"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                </button>
+              </td>
+              <td class="px-4 py-3 text-right">
+                <span class:list={[
+                  'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
+                  addr.used
+                    ? 'bg-gray-700 text-gray-400'
+                    : 'bg-mint-900/50 text-mint-400',
+                ]}>
+                  {addr.used ? 'Used' : 'Unused'}
+                </span>
+                {addr.purpose === 'Change' && (
+                  <span class="ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-yellow-900/40 text-yellow-500">
+                    Change
+                  </span>
+                )}
+              </td>
+              <td class="px-4 py-3 text-right font-mono text-gray-300">
+                {addr.coins.decimal !== '0' && <div>{addr.coins.decimal} ML</div>}
+                <div id={`tokens-${addr.address}`} class="mt-1 flex flex-wrap gap-1 justify-end"></div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</ManagementLayout>
+
+<script>
+  // ── Show/hide empty rows ────────────────────────────────────────────────────
+  const checkbox = document.getElementById('show-zero') as HTMLInputElement | null;
+
+  function applyFilter() {
+    const show = checkbox?.checked ?? false;
+    document.querySelectorAll<HTMLTableRowElement>('tr[data-zero="true"]').forEach(r => {
+      r.classList.toggle('hidden', !show);
+    });
+  }
+
+  applyFilter(); // hidden by default
+  checkbox?.addEventListener('change', applyFilter);
+
+  // ── Token badge tooltip styles (injected once, used in dynamic innerHTML) ────
+  const tooltipStyle = document.createElement('style');
+  tooltipStyle.textContent = `
+    .tok-badge { position: relative; display: inline-flex; align-items: center; gap: 3px; }
+    .tok-badge .tok-tip {
+      position: absolute; bottom: calc(100% + 6px); left: 0;
+      width: max-content;
+      background: #030712; border: 1px solid #374151; border-radius: 8px;
+      padding: 6px 10px; font-size: 11px; color: #e5e7eb;
+      box-shadow: 0 8px 24px rgba(0,0,0,.7);
+      opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 50;
+    }
+    .tok-badge .tok-tip-label {
+      display: block; color: #6b7280; margin-bottom: 2px; font-family: sans-serif;
+    }
+    .tok-badge .tok-tip-id {
+      display: block; font-family: monospace; white-space: nowrap;
+    }
+    .tok-badge:hover .tok-tip { opacity: 1; }
+    .tok-badge .tok-i { color: #4b5563; flex-shrink: 0; }
+    .tok-badge:hover .tok-i { color: #9ca3af; }
+  `;
+  document.head.appendChild(tooltipStyle);
+
+  const INFO_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tok-i"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+
+  // ── Indexer enrichment: token holdings per address ─────────────────────────
+  interface TokenHolding {
+    token_id: string;
+    ticker: string;
+    isNFT: boolean;
+    amount: { decimal: string };
+  }
+
+  async function enrichWithTokens() {
+    // Check indexer is available
+    const statusRes = await fetch('/api/indexer-status').then(r => r.json()).catch(() => ({ up: false })) as { up: boolean };
+    if (!statusRes.up) return;
+
+    // Collect all address values from the table rows
+    const rows = document.querySelectorAll<HTMLTableRowElement>('tr[data-address]');
+    const addresses = Array.from(rows).map(r => r.dataset.address!).filter(Boolean);
+    if (addresses.length === 0) return;
+
+    const res = await fetch(`/api/address-tokens?addresses=${encodeURIComponent(addresses.join(','))}`).catch(() => null);
+    if (!res?.ok) return;
+    const data = await res.json() as { ok: boolean; result?: Record<string, TokenHolding[]> };
+    if (!data.ok || !data.result) return;
+
+    for (const [addr, tokens] of Object.entries(data.result)) {
+      if (tokens.length === 0) continue;
+
+      // Reveal the row if it was hidden due to zero ML balance
+      const row = document.querySelector<HTMLTableRowElement>(`tr[data-address="${CSS.escape(addr)}"]`);
+      if (row) {
+        row.removeAttribute('data-zero');
+        row.classList.remove('hidden');
+      }
+
+      // Inject token badges into the holdings cell
+      const cell = document.getElementById(`tokens-${addr}`);
+      if (!cell) continue;
+
+      const MAX_VISIBLE = 3;
+      const visible = tokens.slice(0, MAX_VISIBLE);
+      const overflow = tokens.length - MAX_VISIBLE;
+
+      cell.innerHTML = visible.map(t => {
+        const label = t.isNFT ? `NFT · ${t.ticker}` : `${t.amount.decimal} ${t.ticker}`;
+        const colorCls = t.isNFT
+          ? 'bg-purple-900/40 text-purple-300 border-purple-800'
+          : 'bg-gray-800 text-gray-300 border-gray-700';
+        const midId = t.token_id.length > 16 ? `${t.token_id.slice(0, 7)}\u2026${t.token_id.slice(-7)}` : t.token_id;
+        return `<span class="tok-badge inline-block rounded px-1.5 py-0.5 text-xs border font-sans ${colorCls}">${label}${INFO_SVG}<span class="tok-tip"><span class="tok-tip-label">Token ID</span><span class="tok-tip-id">${midId}</span></span></span>`;
+      }).join('') + (overflow > 0
+        ? `<span class="inline-block rounded px-1.5 py-0.5 text-xs border bg-gray-800 text-gray-500 border-gray-700">+${overflow} more</span>`
+        : '');
+    }
+  }
+
+  enrichWithTokens();
+</script>

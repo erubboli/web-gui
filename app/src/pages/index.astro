@@ -1,0 +1,177 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import SyncStatus from '@/components/SyncStatus';
+import ReceiveModal from '@/components/ReceiveModal';
+import { getBalance, walletBestBlock, getStakingStatus, listCreatedBlocks, nodeChainstateInfo, getTokensInfo, WalletRpcError, type BlockInfo, type ChainstateInfo } from '@/lib/wallet-rpc';
+
+// ── Fetch data from wallet-rpc-daemon ────────────────────────────────────────
+let balance: Awaited<ReturnType<typeof getBalance>> | null = null;
+let blockInfo: BlockInfo | null = null;
+let chainstate: ChainstateInfo | null = null;
+let stakingStatus: string | null = null;
+let blocksFound: number | null = null;
+let walletError: string | null = null;
+let daemonOffline = false;
+let fungibleCount = 0;
+let nftCount = 0;
+
+try {
+  [balance, blockInfo, stakingStatus, chainstate] = await Promise.all([
+    getBalance(0),
+    walletBestBlock(),
+    getStakingStatus(0),
+    nodeChainstateInfo(),
+  ]);
+  blocksFound = await listCreatedBlocks(0).then(b => b.length).catch(() => null);
+
+  // Classify tokens into fungible vs NFT
+  if (balance && Object.keys(balance.tokens).length > 0) {
+    const tokenIds = Object.keys(balance.tokens);
+    const infos = await Promise.all(
+      tokenIds.map(id => getTokensInfo([id]).then(([info]) => info ?? null).catch(() => null))
+    );
+    for (const info of infos) {
+      if (!info) continue;
+      if (info.type === 'NonFungibleToken') nftCount++;
+      else fungibleCount++;
+    }
+  }
+} catch (err) {
+  if (err instanceof WalletRpcError) {
+    if (err.code === -32000 || err.message.includes('Cannot reach')) {
+      daemonOffline = true;
+    } else {
+      walletError = err.message;
+    }
+  } else {
+    walletError = (err as Error).message;
+  }
+}
+
+const isStaking = stakingStatus === 'Staking';
+const totalTokens = fungibleCount + nftCount;
+const indexerEnabled = process.env.INDEXER_ENABLED === 'true';
+---
+
+<Layout title="Dashboard" activeNav="dashboard">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-gray-100">Dashboard</h1>
+    <ReceiveModal client:load />
+  </div>
+
+  <!-- Offline / setup banner -->
+  {daemonOffline && (
+    <div class="rounded-lg border border-yellow-700 bg-yellow-900/30 p-4 mb-6 text-yellow-300 text-sm">
+      <strong class="font-semibold">Wallet daemon unreachable.</strong>
+      {' '}Check that <code>wallet-rpc-daemon</code> is running.
+      <a href="/setup" class="ml-2 underline hover:text-yellow-100">Set up wallet →</a>
+    </div>
+  )}
+
+  {walletError && !daemonOffline && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 mb-6 text-red-300 text-sm">
+      <strong class="font-semibold">Error:</strong> {walletError}
+      <a href="/setup" class="ml-2 underline hover:text-red-100">Open / create wallet →</a>
+    </div>
+  )}
+
+  <!-- Live sync status (React island) -->
+  {blockInfo && chainstate && (
+    <SyncStatus
+      client:load
+      initialWalletHeight={blockInfo.height}
+      initialNodeHeight={chainstate.best_block_height}
+      initialIsSyncing={chainstate.is_initial_block_download}
+      indexerEnabled={indexerEnabled}
+    />
+  )}
+
+  <!-- Stats grid -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <!-- Balance -->
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Balance (confirmed)</p>
+      {balance ? (
+        <p class="text-3xl font-bold text-mint-400 font-mono">
+          {balance.coins.decimal}
+          <span class="text-base text-gray-400 ml-1">ML</span>
+        </p>
+      ) : (
+        <p class="text-3xl font-bold text-gray-700">—</p>
+      )}
+      {totalTokens > 0 && (
+        <a href="/balances" class="inline-flex items-center gap-1.5 mt-2 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+          {fungibleCount > 0 && <span>{fungibleCount} token{fungibleCount !== 1 ? 's' : ''}</span>}
+          {fungibleCount > 0 && nftCount > 0 && <span class="text-gray-700">·</span>}
+          {nftCount > 0 && <span>{nftCount} NFT{nftCount !== 1 ? 's' : ''}</span>}
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+      )}
+    </div>
+
+    <!-- Wallet block height -->
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Wallet Block</p>
+      {blockInfo ? (
+        <p class="text-3xl font-bold text-gray-100 font-mono">#{blockInfo.height.toLocaleString()}</p>
+      ) : (
+        <p class="text-3xl font-bold text-gray-700">—</p>
+      )}
+      {chainstate && blockInfo && (
+        <p class="text-xs text-gray-500 mt-1">
+          Node: <span class="font-mono">#{chainstate.best_block_height.toLocaleString()}</span>
+        </p>
+      )}
+    </div>
+
+    <!-- Staking -->
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Staking (account 0)</p>
+      {stakingStatus ? (
+        <div class="flex items-center gap-2 mt-1">
+          <span class:list={[
+            'inline-block w-2.5 h-2.5 rounded-full',
+            isStaking ? 'bg-mint-400 animate-pulse' : 'bg-gray-600',
+          ]} />
+          <span class:list={[
+            'text-xl font-semibold',
+            isStaking ? 'text-mint-400' : 'text-gray-400',
+          ]}>
+            {isStaking ? 'Active' : 'Inactive'}
+          </span>
+        </div>
+      ) : (
+        <p class="text-xl font-bold text-gray-700 mt-1">—</p>
+      )}
+    </div>
+
+    <!-- Blocks found -->
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Blocks Found</p>
+      {blocksFound !== null ? (
+        <p class="text-3xl font-bold text-gray-100 font-mono">{blocksFound.toLocaleString()}</p>
+      ) : (
+        <p class="text-3xl font-bold text-gray-700">—</p>
+      )}
+    </div>
+  </div>
+
+  <!-- Block ID -->
+  {blockInfo && (
+    <div class="rounded-xl bg-gray-900 border border-gray-800 p-5 mb-4">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-2">Wallet Best Block ID</p>
+      <span class="inline-flex items-center gap-1 flex-wrap">
+        <span class="font-mono text-xs text-gray-400 break-all">{blockInfo.id}</span>
+        <button type="button"
+          class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors shrink-0"
+          data-copy-value={blockInfo.id} title="Copy block ID">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+          </svg>
+        </button>
+      </span>
+    </div>
+  )}
+
+</Layout>

@@ -1,0 +1,185 @@
+---
+import ManagementLayout from '@/layouts/ManagementLayout.astro';
+import { listTransactions, listPendingTransactions, getTransactionSignedRaw, WalletRpcError, type TransactionInfo } from '@/lib/wallet-rpc';
+import { decodeSignedTransaction, outputVariant, isTransferOutput, outputValueLabel, type DecodedTransaction } from '@/lib/tx-decoder';
+
+const EXPLORER_BASE =
+  (process.env.ML_EXPLORER_URL ?? 'https://explorer.mintlayer.org').replace(/\/$/, '');
+
+let transactions: TransactionInfo[] = [];
+let pending: string[] = [];
+let details: Map<string, DecodedTransaction | null> = new Map();
+let error: string | null = null;
+
+try {
+  [transactions, pending] = await Promise.all([
+    listTransactions(0, 50),
+    listPendingTransactions(0),
+  ]);
+
+  const rawResults = await Promise.allSettled(
+    transactions.map((tx) => getTransactionSignedRaw(tx.id, 0)),
+  );
+  rawResults.forEach((result, i) => {
+    const hex = result.status === 'fulfilled' ? result.value : null;
+    details.set(transactions[i].id, decodeSignedTransaction(hex));
+  });
+} catch (err) {
+  error = err instanceof WalletRpcError ? err.message : (err as Error).message;
+}
+
+function formatDate(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString();
+}
+
+function truncateTxId(id: string) {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-8)}` : id;
+}
+
+function outputSummary(detail: DecodedTransaction | null | undefined): string {
+  if (!detail || detail.outputs.length === 0) return '—';
+
+  const nonTransfer = detail.outputs.filter((o) => !isTransferOutput(o));
+  if (nonTransfer.length > 0) {
+    const types = [...new Set(nonTransfer.map(outputVariant))];
+    return types.join(', ');
+  }
+
+  // All outputs are Transfer / LockThenTransfer — show value from first output
+  const label = outputValueLabel(detail.outputs[0]);
+  return label ?? 'Transfer';
+}
+---
+
+<ManagementLayout title="Transactions" activeTab="transactions">
+  <h1 class="text-2xl font-bold text-gray-100 mb-6">Transactions</h1>
+
+  {error && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 text-red-300 text-sm mb-6">
+      <strong class="font-semibold">Error loading transactions:</strong> {error}
+    </div>
+  )}
+
+  <!-- Pending transactions -->
+  {!error && pending.length > 0 && (
+    <div class="mb-8">
+      <h2 class="text-xs text-gray-500 uppercase tracking-wider mb-3">Pending ({pending.length})</h2>
+      <div class="rounded-xl border border-yellow-800/50 bg-yellow-900/10 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-yellow-800/30 text-left text-xs text-gray-500 uppercase tracking-wider">
+              <th class="px-4 py-3">Transaction ID</th>
+              <th class="px-4 py-3 text-right">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-yellow-800/20">
+            {pending.map((txId) => (
+              <tr class="hover:bg-yellow-900/10 transition-colors">
+                <td class="px-4 py-3 font-mono text-xs text-gray-300">
+                  <span title={txId}>{truncateTxId(txId)}</span>
+                  <button
+                    type="button"
+                    class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                    data-copy-value={txId}
+                    title="Copy transaction ID"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                  </button>
+                </td>
+                <td class="px-4 py-3 text-right">
+                  <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-yellow-900/50 text-yellow-400">
+                    Pending
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  <!-- Confirmed transactions -->
+  {!error && (
+    <div>
+      <h2 class="text-xs text-gray-500 uppercase tracking-wider mb-3">
+        Confirmed {transactions.length > 0 ? `(last ${transactions.length})` : ''}
+      </h2>
+
+      {transactions.length === 0 ? (
+        <p class="text-gray-500 text-sm">No confirmed transactions yet.</p>
+      ) : (
+        <div class="overflow-x-auto rounded-xl border border-gray-800">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-800 bg-gray-900/60 text-left text-xs text-gray-500 uppercase tracking-wider">
+                <th class="px-4 py-3">Time</th>
+                <th class="px-4 py-3">Transaction ID</th>
+                <th class="px-4 py-3 text-right">Block</th>
+                <th class="px-4 py-3">Output Type</th>
+                <th class="px-4 py-3 text-right">In / Out</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800/60">
+              {transactions.map((tx) => {
+                const detail = details.get(tx.id);
+                return (
+                  <tr class="bg-gray-900 hover:bg-gray-800/60 transition-colors">
+                    <!-- Time -->
+                    <td class="px-4 py-3 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+                      {formatDate(tx.timestamp.timestamp)}
+                    </td>
+
+                    <!-- TXID -->
+                    <td class="px-4 py-3 font-mono text-xs text-gray-300 whitespace-nowrap">
+                      <a
+                        href={`${EXPLORER_BASE}/transaction/${tx.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="hover:text-mint-400 transition-colors"
+                        title={tx.id}
+                      >
+                        {truncateTxId(tx.id)}
+                      </a>
+                      <button
+                        type="button"
+                        class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+                        data-copy-value={tx.id}
+                        title="Copy transaction ID"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2" />
+                          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 12 2v1" />
+                        </svg>
+                      </button>
+                    </td>
+
+                    <!-- Block height -->
+                    <td class="px-4 py-3 text-right text-gray-400 tabular-nums">
+                      {tx.height.toLocaleString()}
+                    </td>
+
+                    <!-- Output summary -->
+                    <td class="px-4 py-3 text-xs text-gray-400">
+                      {outputSummary(detail)}
+                    </td>
+
+                    <!-- Input / Output counts -->
+                    <td class="px-4 py-3 text-right text-xs text-gray-400 tabular-nums whitespace-nowrap">
+                      {detail
+                        ? `${detail.inputs.length} / ${detail.outputs.length}`
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )}
+</ManagementLayout>

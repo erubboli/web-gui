@@ -1,0 +1,324 @@
+---
+import ManagementLayout from '@/layouts/ManagementLayout.astro';
+import {
+  walletInfo,
+  walletShowSeedPhrase,
+  walletLockPrivateKeys,
+  walletUnlockPrivateKeys,
+  walletSetLookaheadSize,
+  getStakingStatus,
+  WalletRpcError,
+  type WalletInfo,
+  type SeedPhraseResult,
+} from '@/lib/wallet-rpc';
+import { verifyTOTP } from '@/lib/auth';
+
+let info: WalletInfo | null = null;
+let infoError: string | null = null;
+let seedPhrase: SeedPhraseResult | null = null;
+let actionSuccess: string | null = null;
+let actionError: string | null = null;
+// null = unknown (probe failed for unrelated reason), true = locked, false = unlocked
+let isLocked: boolean | null = null;
+let isStaking = false;
+
+// Load wallet info and staking status
+try {
+  [info] = await Promise.all([
+    walletInfo(),
+    getStakingStatus(0).then(s => { isStaking = s === 'Staking'; }).catch(() => {}),
+  ]);
+} catch (err) {
+  infoError = (err as Error).message;
+}
+
+// Handle POST actions
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  try {
+    if (action === 'show_seed') {
+      const totpCode = (form.get('totp_code') as string | null) ?? '';
+      const totpSecret = process.env.UI_TOTP_SECRET ?? '';
+      if (!verifyTOTP(totpCode, totpSecret)) {
+        actionError = 'Invalid authenticator code.';
+      } else {
+        seedPhrase = await walletShowSeedPhrase();
+        isLocked = false;
+        if (!seedPhrase) actionError = 'Seed phrase is not stored in this wallet.';
+      }
+    } else if (action === 'lock') {
+      await walletLockPrivateKeys();
+      isLocked = true;
+      actionSuccess = 'Private keys locked.';
+    } else if (action === 'unlock') {
+      const password = form.get('password') as string;
+      await walletUnlockPrivateKeys(password);
+      isLocked = false;
+      actionSuccess = 'Private keys unlocked.';
+    } else if (action === 'set_lookahead') {
+      const size = parseInt(form.get('lookahead_size') as string, 10);
+      await walletSetLookaheadSize(size);
+      actionSuccess = `Lookahead size set to ${size}.`;
+    }
+  } catch (err) {
+    actionError = err instanceof WalletRpcError ? err.message : (err as Error).message;
+  }
+}
+
+// Probe lock state on initial GET (or if action didn't resolve it)
+if (isLocked === null) {
+  try {
+    await walletShowSeedPhrase(); // succeeds only when keys are unlocked
+    isLocked = false;
+  } catch {
+    isLocked = true;
+  }
+}
+---
+
+<ManagementLayout title="Wallet" activeTab="wallet">
+  <h1 class="text-2xl font-bold text-gray-100 mb-6">Wallet</h1>
+
+  <!-- Wallet info -->
+  {infoError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 text-red-300 text-sm mb-6">
+      {infoError}
+    </div>
+  )}
+
+  {info && (
+    <div class="rounded-xl border border-gray-800 bg-gray-900 p-5 mb-8">
+      <h2 class="text-xs text-gray-500 uppercase tracking-wider mb-3">Wallet Info</h2>
+      <dl class="space-y-2 text-sm">
+        <div class="flex gap-3">
+          <dt class="text-gray-500 w-32 shrink-0">Wallet ID</dt>
+          <dd class="font-mono text-gray-300 break-all">
+            {info.wallet_id}
+            <button
+              type="button"
+              class="ml-1.5 inline-flex items-center align-middle text-gray-600 hover:text-mint-400 transition-colors"
+              data-copy-value={info.wallet_id}
+              title="Copy wallet ID"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+            </button>
+          </dd>
+        </div>
+        <div class="flex gap-3">
+          <dt class="text-gray-500 w-32 shrink-0">Accounts</dt>
+          <dd class="text-gray-300">{info.account_names.length}</dd>
+        </div>
+        <div class="flex gap-3">
+          <dt class="text-gray-500 w-32 shrink-0">Private Keys</dt>
+          <dd>
+            {isLocked === true && (
+              <span class="inline-flex items-center gap-1.5 text-orange-400 text-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                Locked
+              </span>
+            )}
+            {isLocked === false && (
+              <span class="inline-flex items-center gap-1.5 text-mint-400 text-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+                </svg>
+                Unlocked
+              </span>
+            )}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  )}
+
+  <!-- Action feedback -->
+  {actionSuccess && (
+    <div class="rounded-lg border border-mint-700 bg-mint-900/30 p-3 mb-6 text-mint-300 text-sm">
+      {actionSuccess}
+    </div>
+  )}
+  {actionError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-3 mb-6 text-red-300 text-sm">
+      {actionError}
+    </div>
+  )}
+
+  <!-- Seed phrase modal -->
+  {seedPhrase && (
+    <div id="seed-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div class="relative w-full max-w-lg rounded-2xl border border-yellow-700 bg-gray-950 shadow-2xl p-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-yellow-400 uppercase tracking-wider">Seed Phrase</h2>
+          <button
+            id="close-seed-modal"
+            type="button"
+            class="text-gray-500 hover:text-gray-200 transition-colors"
+            aria-label="Close"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Warning -->
+        <p class="text-xs text-yellow-600 mb-4">Never share this with anyone. Anyone with these words can take your funds.</p>
+
+        {seedPhrase.passphrase && (
+          <p class="text-sm text-yellow-400 mb-4">
+            Passphrase: <span class="font-mono">{seedPhrase.passphrase}</span>
+          </p>
+        )}
+
+        <!-- Words grid -->
+        <div class="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-5">
+          {seedPhrase.seed_phrase.map((word, i) => (
+            <div class="flex items-center gap-1.5 rounded bg-gray-900 border border-gray-800 px-2.5 py-1.5">
+              <span class="text-xs text-gray-600 w-5 text-right shrink-0">{i + 1}.</span>
+              <span class="font-mono text-sm text-yellow-200">{word}</span>
+            </div>
+          ))}
+        </div>
+
+        <!-- Close button -->
+        <button
+          id="close-seed-modal-btn"
+          type="button"
+          class="w-full rounded-lg bg-gray-800 hover:bg-gray-700 px-4 py-2 text-sm text-gray-200 font-medium transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )}
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+    <!-- Show seed phrase -->
+    <div class="rounded-xl border border-gray-800 bg-gray-900 p-5">
+      <h2 class="text-sm font-medium text-gray-200 mb-1">Seed Phrase</h2>
+      <p class="text-xs text-gray-500 mb-4">Requires your authenticator code to reveal.</p>
+      <form method="POST" class="space-y-3">
+        <input type="hidden" name="action" value="show_seed" />
+        <div>
+          <label for="totp_code" class="block text-xs text-gray-500 mb-1">Authenticator Code</label>
+          <input
+            id="totp_code"
+            type="text"
+            name="totp_code"
+            required
+            inputmode="numeric"
+            maxlength="6"
+            autocomplete="one-time-code"
+            pattern="[0-9]{6}"
+            placeholder="000000"
+            class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-200
+                   placeholder-gray-600 font-mono tracking-widest text-center focus:outline-none
+                   focus:border-yellow-600"
+          />
+        </div>
+        <button
+          type="submit"
+          class="w-full rounded-lg bg-yellow-700 hover:bg-yellow-600 px-4 py-2 text-sm text-white font-medium transition-colors"
+        >
+          Show Seed Phrase
+        </button>
+      </form>
+    </div>
+
+    <!-- Lock / unlock private keys -->
+    <div class="rounded-xl border border-gray-800 bg-gray-900 p-5">
+      <h2 class="text-sm font-medium text-gray-200 mb-1">Private Keys</h2>
+      <p class="text-xs text-gray-500 mb-4">
+        {isLocked ? 'Keys are locked. Enter your password to unlock.' : 'Keys are unlocked. Enter your password to lock.'}
+      </p>
+      {isLocked ? (
+        <form method="POST" class="flex items-center gap-2">
+          <input type="hidden" name="action" value="unlock" />
+          <input
+            type="password"
+            name="password"
+            placeholder="Password"
+            autofocus
+            class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-mint-600 w-36"
+          />
+          <button
+            type="submit"
+            class="rounded-lg bg-mint-700 hover:bg-mint-600 px-4 py-2 text-sm text-white font-medium transition-colors"
+          >
+            Unlock Keys
+          </button>
+        </form>
+      ) : isStaking ? (
+        <p class="text-xs text-orange-400">
+          Cannot lock while staking is running. Stop staking first.
+        </p>
+      ) : (
+        <form method="POST" class="flex items-center gap-2">
+          <input type="hidden" name="action" value="lock" />
+          <input
+            type="password"
+            name="password"
+            placeholder="Password"
+            class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-mint-600 w-36"
+          />
+          <button
+            type="submit"
+            class="rounded-lg bg-gray-700 hover:bg-gray-600 px-4 py-2 text-sm text-white font-medium transition-colors"
+          >
+            Lock Keys
+          </button>
+        </form>
+      )}
+    </div>
+
+    <!-- Set lookahead size -->
+    <div class="rounded-xl border border-gray-800 bg-gray-900 p-5">
+      <h2 class="text-sm font-medium text-gray-200 mb-1">Lookahead Size</h2>
+      <p class="text-xs text-gray-500 mb-4">
+        Number of addresses to monitor past the last used one (gap limit). Default is 20.
+      </p>
+      <form method="POST" class="flex items-center gap-2">
+        <input type="hidden" name="action" value="set_lookahead" />
+        <input
+          type="number"
+          name="lookahead_size"
+          min="1"
+          max="1000"
+          value="20"
+          class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-mint-600 w-24"
+        />
+        <button
+          type="submit"
+          class="rounded-lg bg-gray-700 hover:bg-gray-600 px-4 py-2 text-sm text-white font-medium transition-colors"
+        >
+          Set
+        </button>
+      </form>
+    </div>
+  </div>
+</ManagementLayout>
+
+<script>
+  function closeSeedModal() {
+    const modal = document.getElementById('seed-modal');
+    if (modal) modal.remove();
+  }
+  document.getElementById('close-seed-modal')?.addEventListener('click', closeSeedModal);
+  document.getElementById('close-seed-modal-btn')?.addEventListener('click', closeSeedModal);
+  // Close on backdrop click
+  document.getElementById('seed-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSeedModal();
+  });
+  // Close on Escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSeedModal();
+  });
+</script>

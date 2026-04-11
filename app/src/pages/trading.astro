@@ -1,0 +1,83 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import OrderBook from '@/components/OrderBook';
+import { listOwnOrders, getBalance, getTokensInfo, type OrderInfo } from '@/lib/wallet-rpc';
+import { hexToText } from '@/lib/wallet-rpc';
+import { INDEXER_START_CMD } from '@/lib/indexer';
+
+let ownOrders: OrderInfo[] = [];
+let loadError: string | null = null;
+let balanceTokens: { tokenId: string; ticker: string }[] = [];
+
+try {
+  const [orders, balance] = await Promise.all([
+    listOwnOrders(0),
+    getBalance(0),
+  ]);
+  ownOrders = orders;
+
+  const tokenIds = Object.keys(balance.tokens).filter(
+    id => parseFloat(balance.tokens[id].decimal) > 0
+  );
+  if (tokenIds.length > 0) {
+    const infos = await getTokensInfo(tokenIds);
+    balanceTokens = tokenIds.map((id, i) => {
+      const info = infos[i];
+      let ticker = id.slice(0, 8) + '…';
+      if (info?.type === 'FungibleToken') {
+        ticker = hexToText(info.content.token_ticker) || ticker;
+      } else if (info?.type === 'NonFungibleToken') {
+        ticker = hexToText(info.content.metadata.ticker) || ticker;
+      }
+      return { tokenId: id, ticker };
+    });
+  }
+} catch (err) {
+  loadError = (err as Error).message;
+}
+---
+
+<Layout title="Trading" activeNav="trading">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-gray-100">Trading</h1>
+  </div>
+
+  <div id="indexer-warning" style="display:none"
+       class="rounded-lg border border-amber-700 bg-amber-900/20 p-4 mb-6 text-amber-300 text-sm">
+    <strong class="block mb-1">Indexer not running</strong>
+    Some features (browsing all market orders, filtering by trading pair) require the indexer.
+    Start it with:
+    <code class="block mt-2 rounded bg-gray-900 px-3 py-1.5 text-xs text-gray-300 font-mono">{INDEXER_START_CMD}</code>
+  </div>
+
+  <div id="indexer-syncing" style="display:none"
+       class="rounded-lg border border-yellow-700 bg-yellow-900/20 p-4 mb-6 text-yellow-300 text-sm">
+    <strong class="block mb-1">Indexer still syncing</strong>
+    Some features may not work as expected until the indexer catches up with the chain.
+  </div>
+
+  {loadError && (
+    <div class="rounded-lg border border-red-700 bg-red-900/30 p-4 mb-6 text-red-300 text-sm">
+      <strong>Error loading orders:</strong> {loadError}
+    </div>
+  )}
+
+  <!-- ── Create order + order book ──────────────────────────────────────────── -->
+  <OrderBook client:load initialOwnOrders={ownOrders} balanceTokens={balanceTokens} />
+
+</Layout>
+
+<script>
+fetch('/api/indexer-status')
+  .then(r => r.json())
+  .then((data: { up: boolean; synced: boolean }) => {
+    if (!data.up) {
+      const el = document.getElementById('indexer-warning');
+      if (el) el.style.display = '';
+    } else if (!data.synced) {
+      const el = document.getElementById('indexer-syncing');
+      if (el) el.style.display = '';
+    }
+  })
+  .catch(() => { /* ignore */ });
+</script>
