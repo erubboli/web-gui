@@ -2,9 +2,12 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Mintlayer Web GUI — interactive setup
-# Inspired by the Astro create CLI style
+# Mintlayer Web GUI — remote installer
+# Served at https://www.mintlayer.org/get/init.sh
+# Usage: bash <(curl -sSL https://www.mintlayer.org/get/init.sh)
 # ─────────────────────────────────────────────────────────────────────────────
+
+BASE_URL="https://www.mintlayer.org/get"
 
 # ── Colors & symbols ──────────────────────────────────────────────────────────
 RESET=$'\033[0m'
@@ -95,100 +98,70 @@ rand_pass() {
   fi
 }
 
-# ── Detect OS ─────────────────────────────────────────────────────────────────
-detect_os() {
-  case "$(uname -s)" in
-    Darwin) echo "macos" ;;
-    Linux)
-      if grep -qi microsoft /proc/version 2>/dev/null; then
-        echo "wsl"
-      else
-        echo "linux"
-      fi
-      ;;
-    MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
-    *) echo "unknown" ;;
-  esac
+# ── Bootstrap: download compose file if not already present ───────────────────
+bootstrap_remote() {
+  if [[ -f docker-compose.yml ]]; then
+    return
+  fi
+
+  printf "\n"
+  printf "${CYAN}◆${RESET} ${BOLD}Install location${RESET}\n"
+  printf "${GRAY}│  Where should Mintlayer Web GUI be installed?${RESET}\n"
+  printf "${CYAN}│${RESET}  Directory: ${GRAY}(${HOME}/mintlayer-gui)${RESET} "
+  read -r input
+  INSTALL_DIR="${input:-${HOME}/mintlayer-gui}"
+
+  mkdir -p "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+
+  printf "${GRAY}│  Downloading docker-compose.yml...${RESET}\n"
+  if ! curl -fsSL "${BASE_URL}/docker-compose.yml" -o docker-compose.yml; then
+    err "Failed to download docker-compose.yml from ${BASE_URL}"
+    exit 1
+  fi
+  ok "Files downloaded to ${INSTALL_DIR}"
+  printf "${GRAY}└─────────────────────────────────────────${RESET}\n"
 }
 
-# ── Docker install instructions ───────────────────────────────────────────────
+# ── Docker install instructions (Linux only) ──────────────────────────────────
 docker_install_hint() {
-  local os
-  os=$(detect_os)
   printf "\n"
-  case "$os" in
-    macos)
-      printf "${BOLD}  Install Docker Desktop for Mac:${RESET}\n"
-      printf "  1. Download from https://docs.docker.com/desktop/install/mac-install/\n"
-      printf "  2. Open the .dmg and drag Docker to Applications\n"
-      printf "  3. Launch Docker Desktop and wait for the whale icon to stop animating\n"
-      printf "  4. Re-run this script\n"
-      ;;
-    wsl)
-      printf "${BOLD}  Install Docker Desktop for Windows (with WSL 2 backend):${RESET}\n"
-      printf "  1. Download from https://docs.docker.com/desktop/install/windows-install/\n"
-      printf "  2. Enable 'Use the WSL 2 based engine' in Docker Desktop settings\n"
-      printf "  3. Ensure your WSL distro is enabled under Resources → WSL Integration\n"
-      printf "  4. Re-run this script inside WSL\n"
-      ;;
-    windows)
-      printf "${BOLD}  Install Docker Desktop for Windows:${RESET}\n"
-      printf "  1. Download from https://docs.docker.com/desktop/install/windows-install/\n"
-      printf "  2. Run the installer and follow the prompts\n"
-      printf "  3. Re-run this script\n"
-      ;;
-    linux)
-      printf "${BOLD}  Install Docker Engine on Linux:${RESET}\n"
-      printf "  Ubuntu/Debian:\n"
-      printf "    curl -fsSL https://get.docker.com | sh\n"
-      printf "    sudo usermod -aG docker \$USER   # then log out and back in\n"
-      printf "\n"
-      printf "  Or follow the official guide for your distro:\n"
-      printf "  https://docs.docker.com/engine/install/\n"
-      printf "\n"
-      printf "  After installing, re-run this script.\n"
-      ;;
-    *)
-      printf "  Visit https://docs.docker.com/get-docker/ for installation instructions.\n"
-      ;;
-  esac
+  printf "${BOLD}  Install Docker Engine on Linux:${RESET}\n"
+  printf "  Ubuntu/Debian:\n"
+  printf "    curl -fsSL https://get.docker.com | sh\n"
+  printf "    sudo usermod -aG docker \$USER   # then log out and back in\n"
+  printf "\n"
+  printf "  Or follow the official guide for your distro:\n"
+  printf "  https://docs.docker.com/engine/install/\n"
+  printf "\n"
+  printf "  After installing, re-run this script.\n"
   printf "\n"
 }
 
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 check_prereqs() {
-  # Check Docker first — give OS-specific install instructions if missing
   if ! command -v docker &>/dev/null; then
     err "Docker is not installed or not in PATH."
     docker_install_hint
     exit 1
   fi
 
-  # Docker found — make sure the daemon is actually running
   if ! docker info &>/dev/null 2>&1; then
     err "Docker is installed but the daemon is not running."
-    local os
-    os=$(detect_os)
-    case "$os" in
-      macos|windows) printf "  ${YELLOW}▲${RESET}  Start Docker Desktop and wait for it to finish loading, then re-run this script.\n\n" ;;
-      wsl)           printf "  ${YELLOW}▲${RESET}  Start Docker Desktop on Windows (WSL backend), then re-run this script.\n\n" ;;
-      linux)         printf "  ${YELLOW}▲${RESET}  Run: ${GRAY}sudo systemctl start docker${RESET}\n\n" ;;
-    esac
+    printf "  ${YELLOW}▲${RESET}  Run: ${GRAY}sudo systemctl start docker${RESET}\n\n"
     exit 1
   fi
 
-  # Accept both "docker compose" (v2) and "docker-compose" (v1)
   if ! docker compose version &>/dev/null 2>&1 && ! command -v docker-compose &>/dev/null; then
     err "Docker Compose is not available."
-    printf "  Docker Compose v2 ships with Docker Desktop.\n"
-    printf "  On Linux, install it with: ${GRAY}sudo apt install docker-compose-plugin${RESET}\n"
+    printf "  Install with: ${GRAY}sudo apt install docker-compose-plugin${RESET}\n"
     printf "  Or see: https://docs.docker.com/compose/install/\n\n"
     exit 1
   fi
 
-  command -v node &>/dev/null || {
-    err "Node.js is not installed (required for password hashing)."
-    printf "  Install Node.js v18+ from https://nodejs.org or via your package manager.\n\n"
+  command -v python3 &>/dev/null || {
+    err "Python 3 is not installed (required for password hashing)."
+    printf "  Install with: ${GRAY}sudo apt install python3${RESET}\n\n"
     exit 1
   }
 }
@@ -201,6 +174,12 @@ compose_cmd() {
     echo "docker-compose"
   fi
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bootstrap + prereqs
+# ─────────────────────────────────────────────────────────────────────────────
+bootstrap_remote
+check_prereqs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Banner
@@ -220,8 +199,6 @@ printf "  ${BOLD}Web GUI Setup${RESET}  ${GRAY}— node + wallet-rpc-daemon + we
 printf "\n"
 printf "${GRAY}  This script writes your .env and starts the Docker stack.${RESET}\n"
 printf "\n"
-
-check_prereqs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — Network
@@ -268,7 +245,7 @@ case "$WALLET_CHOICE" in
   *)
     WALLET_ACTION="create"
     hint "The daemon will start without a wallet loaded."
-    hint "Go to http://localhost:<port>/setup to create your wallet, then"
+    hint "Go to http://<your-server-ip>:<port>/setup to create your wallet, then"
     hint "update WALLET_RPC_CMD in .env and restart: docker compose restart wallet-rpc-daemon"
     ;;
 esac
@@ -342,31 +319,19 @@ done
 
 printf "${CYAN}│${RESET}\n"
 hint "Hashing password (this may take a moment)..."
-UI_PASSWORD_HASH=$(node -e "
-  const c = require('crypto');
-  const salt = c.randomBytes(32).toString('hex');
-  c.pbkdf2(process.argv[1], salt, 100000, 64, 'sha512', (err, key) => {
-    if (err) { process.stderr.write(err.message + '\n'); process.exit(1); }
-    process.stdout.write('pbkdf2:sha512:100000:' + salt + ':' + key.toString('hex'));
-  });
+UI_PASSWORD_HASH=$(python3 -c "
+import hashlib, os, sys
+password = sys.argv[1]
+salt = os.urandom(32).hex()
+key = hashlib.pbkdf2_hmac('sha512', password.encode(), bytes.fromhex(salt), 100000)
+print('pbkdf2:sha512:100000:' + salt + ':' + key.hex(), end='')
 " "$UI_PASSWORD")
 ok "Password hashed"
 
 # Generate TOTP secret (20 random bytes → base32)
-UI_TOTP_SECRET=$(node -e "
-  const bytes = require('crypto').randomBytes(20);
-  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let result = '', bits = 0, value = 0;
-  for (let i = 0; i < bytes.length; i++) {
-    value = (value << 8) | bytes[i];
-    bits += 8;
-    while (bits >= 5) {
-      result += alpha[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) result += alpha[(value << (5 - bits)) & 31];
-  process.stdout.write(result);
+UI_TOTP_SECRET=$(python3 -c "
+import os, base64
+print(base64.b32encode(os.urandom(20)).decode(), end='')
 ")
 
 # Generate session signing secret
@@ -400,7 +365,6 @@ confirm SCANNED "I have scanned the QR code / saved the TOTP secret" "N"
 while [[ "$SCANNED" != "yes" ]]; do
   printf "${CYAN}│${RESET}  ${RED}Please scan the QR code or save the secret before continuing.${RESET}\n"
   printf "${CYAN}│${RESET}\n"
-  # Re-display the URI in case they need it again
   if command -v qrencode &>/dev/null; then
     echo "$TOTP_URI" | qrencode -t ANSIUTF8 | sed "s/^/${CYAN}│${RESET}  /"
   else
@@ -419,10 +383,9 @@ divider
 step "Web interface"
 
 ask "Port for the web GUI"
-hint "The Astro web interface will be available at http://localhost:<port>"
+hint "The web interface will be available at http://<your-server-ip>:<port>"
 prompt WEB_GUI_PORT "Port:" "4321"
 
-# Validate it's a number
 while ! [[ "$WEB_GUI_PORT" =~ ^[0-9]+$ ]] || (( WEB_GUI_PORT < 1 || WEB_GUI_PORT > 65535 )); do
   printf "${CYAN}│${RESET}  ${RED}Enter a valid port number (1-65535)${RESET}\n"
   prompt WEB_GUI_PORT "Port:" "4321"
@@ -510,7 +473,7 @@ printf "${CYAN}│${RESET}  %-22s ${wallet_summary}\n" "Wallet:"
 
 printf "${CYAN}│${RESET}  %-22s %s\n" "Passwords:"  "${BOLD}$([ "$USE_RANDOM_PASSWORDS" == "yes" ] && echo "randomly generated" || echo "custom")${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Web UI auth:"  "${BOLD}password + TOTP 2FA${RESET}"
-printf "${CYAN}│${RESET}  %-22s %s\n" "Web GUI:"    "${BOLD}http://localhost:${WEB_GUI_PORT}${RESET}"
+printf "${CYAN}│${RESET}  %-22s %s\n" "Web GUI:"    "${BOLD}http://<your-server-ip>:${WEB_GUI_PORT}${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Pinata JWT:" "${BOLD}$([ -n "$PINATA_JWT" ] && echo "configured" || echo "not set — token icon uploads disabled")${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Indexer:"    "${BOLD}$([ "$ENABLE_INDEXER" == "yes" ] && echo "enabled (port ${API_WEB_SERVER_PORT}) — Token Management + Trading active" || echo "disabled — Token Management + Trading hidden")${RESET}"
 printf "${CYAN}│${RESET}\n"
@@ -531,11 +494,6 @@ divider
 # ─────────────────────────────────────────────────────────────────────────────
 # Write .env
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Get current user/group IDs for the container's mintlayer user.
-# GIDs below 1000 are reserved system groups on Linux and may already exist
-# inside the container (e.g. macOS 'staff' GID 20 = Linux 'dialout' GID 20).
-# Use 1000 in that case — it's the standard unprivileged GID on Linux.
 ML_USER_ID=$(id -u 2>/dev/null || echo "1000")
 _raw_gid=$(id -g 2>/dev/null || echo "1000")
 if (( _raw_gid < 1000 )); then
@@ -544,10 +502,8 @@ else
   ML_GROUP_ID=$_raw_gid
 fi
 
-# Derive boolean flags
 INDEXER_ENABLED=$([ "$ENABLE_INDEXER" == "yes" ] && echo "true" || echo "false")
 
-# Build the full wallet-rpc-daemon command (avoids shell expansion tricks in docker-compose)
 if [[ -n "$WALLET_FILE" ]]; then
   WALLET_RPC_CMD="wallet-rpc-daemon ${NETWORK} --wallet-file /home/mintlayer/${WALLET_FILE}"
 else
@@ -566,7 +522,7 @@ ML_USER_ID=${ML_USER_ID}
 ML_GROUP_ID=${ML_GROUP_ID}
 
 # Full wallet-rpc-daemon command (includes network + optional --wallet-file)
-# Re-run ./init.sh or edit this line to change wallet file or network.
+# Edit this line to change wallet file or network, then restart wallet-rpc-daemon.
 WALLET_RPC_CMD=${WALLET_RPC_CMD}
 
 # Node RPC credentials
@@ -619,7 +575,7 @@ COMPOSE=$(compose_cmd)
 
 if [[ "$START" == "yes" ]]; then
   printf "${CYAN}│${RESET}\n"
-  hint "Pulling latest images and starting containers..."
+  hint "Pulling images and starting containers..."
   printf "${CYAN}│${RESET}\n"
 
   PROFILES=""
@@ -628,7 +584,7 @@ if [[ "$START" == "yes" ]]; then
   fi
 
   $COMPOSE pull --quiet
-  $COMPOSE $PROFILES up -d --build
+  $COMPOSE $PROFILES up -d
 
   ok "Services started"
 fi
@@ -648,10 +604,10 @@ if [[ "$WALLET_ACTION" == "existing" && -n "$WALLET_FILE" ]]; then
   printf "  ${YELLOW}1.${RESET} Copy your wallet file into the data directory:\n"
   printf "     ${GRAY}cp /path/to/your/wallet ./mintlayer-data/${WALLET_FILE}${RESET}\n\n"
   printf "  ${YELLOW}2.${RESET} Open the dashboard:\n"
-  printf "     ${CYAN}http://localhost:${WEB_GUI_PORT}${RESET}\n\n"
+  printf "     ${CYAN}http://<your-server-ip>:${WEB_GUI_PORT}${RESET}\n\n"
 else
   printf "  ${YELLOW}1.${RESET} Create your wallet via the web UI:\n"
-  printf "     ${CYAN}http://localhost:${WEB_GUI_PORT}/setup${RESET}\n\n"
+  printf "     ${CYAN}http://<your-server-ip>:${WEB_GUI_PORT}/setup${RESET}\n\n"
   printf "  ${YELLOW}2.${RESET} Then point the daemon at the new file — edit ${GRAY}.env${RESET}:\n"
   printf "     ${GRAY}WALLET_RPC_CMD=wallet-rpc-daemon ${NETWORK} --wallet-file /home/mintlayer/<filename>${RESET}\n\n"
   printf "  ${YELLOW}3.${RESET} Restart the wallet daemon:\n"
@@ -666,28 +622,3 @@ printf "\n"
 printf "  ${DIM}Note: mainnet sync takes hours on first run.${RESET}\n"
 printf "  ${DIM}Balance and history appear once the node is fully synced.${RESET}\n"
 printf "\n"
-
-# ── Open browser ──────────────────────────────────────────────────────────────
-if [[ "$START" == "yes" ]]; then
-  # Determine the landing page
-  if [[ "$WALLET_ACTION" == "create" ]]; then
-    OPEN_URL="http://localhost:${WEB_GUI_PORT}/setup"
-  else
-    OPEN_URL="http://localhost:${WEB_GUI_PORT}"
-  fi
-
-  # Give the web-gui container a moment to finish starting
-  sleep 2
-
-  # Open the browser (macOS: open, Linux: xdg-open, WSL: cmd.exe)
-  if command -v open &>/dev/null; then
-    open "$OPEN_URL"
-  elif command -v xdg-open &>/dev/null; then
-    xdg-open "$OPEN_URL"
-  elif command -v cmd.exe &>/dev/null; then
-    cmd.exe /c start "$OPEN_URL"
-  else
-    printf "  ${YELLOW}▲${RESET}  Could not detect a browser opener. Visit manually:\n"
-    printf "     ${CYAN}${OPEN_URL}${RESET}\n\n"
-  fi
-fi
