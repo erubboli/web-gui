@@ -6,16 +6,26 @@ import { hexToText } from '@/lib/token-utils';
 import { INDEXER_START_CMD } from '@/lib/indexer';
 
 let mlBalance: string | null = null;
+let mlLocked: string | null = null;
 let tokenBalances: Record<string, { atoms: string; decimal: string }> = {};
+let tokenLocked: Record<string, { atoms: string; decimal: string }> = {};
 let tokenInfos: Map<string, TokenInfo> = new Map();
 let loadError: string | null = null;
 
 try {
-  const balance = await getBalance(0);
+  const [balance, locked] = await Promise.all([
+    getBalance(0, 'Unlocked'),
+    getBalance(0, 'Locked'),
+  ]);
   mlBalance = balance.coins.decimal;
+  mlLocked = locked.coins.decimal;
   tokenBalances = balance.tokens ?? {};
+  tokenLocked = locked.tokens ?? {};
 
-  const tokenIds = Object.keys(tokenBalances);
+  const tokenIds = Array.from(new Set([
+    ...Object.keys(tokenBalances),
+    ...Object.keys(tokenLocked),
+  ]));
   if (tokenIds.length > 0) {
     const results = await Promise.all(
       tokenIds.map(id => getTokensInfo([id]).then(([info]) => ({ id, info: info ?? null })))
@@ -31,7 +41,8 @@ try {
   loadError = (err as Error).message;
 }
 
-const tokenEntries = Object.entries(tokenBalances);
+const allTokenIds = Array.from(new Set([...Object.keys(tokenBalances), ...Object.keys(tokenLocked)]));
+const tokenEntries = allTokenIds.map(id => ({ id, bal: tokenBalances[id] ?? { atoms: '0', decimal: '0' }, locked: tokenLocked[id] ?? { atoms: '0', decimal: '0' } }));
 const network = (process.env.NETWORK ?? 'mainnet').toLowerCase();
 
 function midId(id: string) {
@@ -108,7 +119,12 @@ function nftIconUrl(info: TokenInfo | undefined): string | null {
           </td>
           <td class="px-4 py-3 text-right font-mono text-gray-200">
             {mlBalance !== null ? (
-              <span>{mlBalance} <span class="text-gray-500 text-xs">ML</span></span>
+              <span class="inline-flex flex-col items-end gap-0.5">
+                <span>{mlBalance} <span class="text-gray-500 text-xs">ML</span></span>
+                {mlLocked && parseFloat(mlLocked) > 0 && (
+                  <span class="text-gray-500 text-xs">(+ locked {mlLocked} ML)</span>
+                )}
+              </span>
             ) : (
               <span class="text-gray-600">—</span>
             )}
@@ -126,7 +142,7 @@ function nftIconUrl(info: TokenInfo | undefined): string | null {
         </tr>
 
         <!-- Token rows -->
-        {tokenEntries.map(([tokenId, bal]) => {
+        {tokenEntries.map(({ id: tokenId, bal, locked }) => {
           const info = tokenInfos.get(tokenId);
           const ticker = tokenTicker(info);
           const nft = isNFT(info);
@@ -191,6 +207,7 @@ function nftIconUrl(info: TokenInfo | undefined): string | null {
                 </span>
               </td>
               <td class="px-4 py-3 text-right font-mono text-gray-200">
+                <span class="inline-flex flex-col items-end gap-0.5">
                 <span class="inline-flex items-center justify-end gap-1">
                   {bal.decimal}
                   <span class="text-gray-500 text-xs">{ticker}</span>
@@ -209,6 +226,10 @@ function nftIconUrl(info: TokenInfo | undefined): string | null {
                       <span class="block font-mono text-xs text-gray-200 whitespace-nowrap">{midId(tokenId)}</span>
                     </span>
                   </span>
+                </span>
+                {parseFloat(locked.decimal) > 0 && (
+                  <span class="text-gray-500 text-xs">(+ locked {locked.decimal} {ticker})</span>
+                )}
                 </span>
               </td>
               <td class="px-4 py-3 text-right">

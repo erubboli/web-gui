@@ -24,7 +24,6 @@ export default defineConfig({
         // When running inside Docker, the HMR WebSocket must use the
         // host-side address — not the container's internal hostname.
         host: 'localhost',
-        port: parseInt(process.env.PORT || '4321'),
       },
     },
     optimizeDeps: {

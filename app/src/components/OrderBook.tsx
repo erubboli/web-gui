@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { watchTx } from "@/lib/txWatcher";
 import { submitWithToast } from "@/lib/toastStore";
 import { CopyButton } from "@/components/CopyButton";
@@ -60,6 +60,47 @@ async function rpc<T>(method: string, params: Record<string, unknown> = {}): Pro
   const data = await res.json() as { ok: boolean; result?: T; error?: { message: string } };
   if (!data.ok) throw new Error(data.error?.message ?? "RPC error");
   return data.result as T;
+}
+
+// ── Error translation ─────────────────────────────────────────────────────────
+
+function friendlyError(err: unknown): string {
+  const raw = (err as Error)?.message ?? String(err);
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('not enough funds') || lower.includes('coin selection error')) {
+    // Extract "got" atoms if present
+    const gotMatch = raw.match(/got:\s*Amount\s*\{\s*atoms:\s*(\d+)\s*\}/i);
+    const gotAtoms = gotMatch ? BigInt(gotMatch[1]) : null;
+    const gotML = gotAtoms !== null
+      ? (Number(gotAtoms) / 1e11).toLocaleString(undefined, { maximumFractionDigits: 8 }) + ' ML'
+      : null;
+    return gotML
+      ? `Insufficient funds — your balance (${gotML}) is too low to cover this transaction including fees.`
+      : 'Insufficient funds to cover this transaction including fees.';
+  }
+  if (lower.includes('no wallet') || lower.includes('wallet not open')) {
+    return 'No wallet is open. Please reload the page.';
+  }
+  if (lower.includes('cannot reach') || lower.includes('network') || lower.includes('fetch')) {
+    return 'Could not reach the wallet daemon. Check that all services are running.';
+  }
+  if (lower.includes('broadcast') || lower.includes('rejected')) {
+    return 'Transaction was rejected by the network. Please try again.';
+  }
+  if (lower.includes('already exists') || lower.includes('duplicate')) {
+    return 'This transaction has already been submitted.';
+  }
+  if (lower.includes('locked') || lower.includes('private key')) {
+    return 'Wallet is locked. Unlock your private keys first.';
+  }
+  if (lower.includes('no orders available')) {
+    return 'No matching orders available to fill.';
+  }
+  // Strip noisy "Wallet controller error: Wallet error:" prefixes
+  return raw
+    .replace(/^wallet controller error:\s*/i, '')
+    .replace(/^wallet error:\s*/i, '');
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -192,7 +233,7 @@ function BuySellPanel({
       setAmount(""); setPrice(""); setMlAmount("");
       if (type === "limit") onCreated(); else onPairRefresh();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -366,7 +407,7 @@ function MyOrderRow({ order, onAction }: { order: OrderInfo; onAction: () => voi
       );
       onAction();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -505,7 +546,7 @@ function PairBookRow({
       setFillAmount("");
       onFilled();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -603,6 +644,9 @@ export default function OrderBook({ initialOwnOrders, balanceTokens = [] }: Prop
   const [pairError, setPairError] = useState<string | null>(null);
   const [mlBalance, setMlBalance] = useState<string | null>(null);
   const [tokenBalance, setTokenBalance] = useState<string | null>(null);
+  // Incremented each time a new pair is selected; loadPairOrders checks it before
+  // writing state so stale in-flight responses are silently discarded.
+  const loadSeqRef = useRef(0);
 
   useEffect(() => {
     // Auto-star any tokens that have a balance — merge into favourites
@@ -615,7 +659,37 @@ export default function OrderBook({ initialOwnOrders, balanceTokens = [] }: Prop
         localStorage.setItem(FAV_KEY, JSON.stringify(favs));
       }
     }
-    setFavourites(favs);
+
+    // Resolve any "???" tickers from fresh node info.
+    // node_get_tokens_info does not preserve input order, so call one at a time.
+    const unknownIds = favs.filter(f => !f.ticker || f.ticker === "???").map(f => f.tokenId);
+    if (unknownIds.length > 0) {
+      Promise.all(
+        unknownIds.map(id =>
+          rpc<[{ type: string; content: { token_ticker?: { text: string | null }; metadata?: { ticker?: { text: string | null }; name?: { text: string | null } } } }]>(
+            "node_get_tokens_info", { token_ids: [id] }
+          ).then(([info]) => ({ id, info: info ?? null }))
+        )
+      ).then(results => {
+        const resolved = new Map<string, string>();
+        results.forEach(({ id, info }) => {
+          if (!info) return;
+          const ticker = info.type === "FungibleToken"
+            ? (info.content.token_ticker?.text ?? null)
+            : (info.content.metadata?.ticker?.text ?? info.content.metadata?.name?.text ?? null);
+          if (ticker) resolved.set(id, ticker);
+        });
+        if (resolved.size > 0) {
+          const updated = favs.map(f => resolved.has(f.tokenId) ? { ...f, ticker: resolved.get(f.tokenId)! } : f);
+          localStorage.setItem(FAV_KEY, JSON.stringify(updated));
+          setFavourites(updated);
+        } else {
+          setFavourites(favs);
+        }
+      }).catch(() => setFavourites(favs));
+    } else {
+      setFavourites(favs);
+    }
 
     // Priority: 1) token with balance, 2) first starred, 3) nothing (show message)
     const autoSelect = balanceTokens[0]?.tokenId ?? favs[0]?.tokenId ?? null;
@@ -626,6 +700,7 @@ export default function OrderBook({ initialOwnOrders, balanceTokens = [] }: Prop
   const selectedTicker = rawTicker === "???" ? (selectedTokenId?.slice(0, 12) + "…") : rawTicker;
 
   const loadPairOrders = async (tokenId: string) => {
+    const seq = ++loadSeqRef.current;
     setPairLoading(true);
     setPairError(null);
     try {
@@ -648,6 +723,9 @@ export default function OrderBook({ initialOwnOrders, balanceTokens = [] }: Prop
         ),
       ]);
 
+      // Discard if a newer request was started while we were awaiting
+      if (seq !== loadSeqRef.current) return;
+
       setMlBalance(balance.coins.decimal);
       setTokenBalance(balance.tokens[tokenId]?.decimal ?? "0");
 
@@ -666,9 +744,10 @@ export default function OrderBook({ initialOwnOrders, balanceTokens = [] }: Prop
       setPairAsks(asks.sort((a, b) => priceOf(a, "ask") - priceOf(b, "ask")));
       setPairBids(bids.sort((a, b) => priceOf(b, "bid") - priceOf(a, "bid")));
     } catch (err) {
-      setPairError((err as Error).message);
+      if (seq !== loadSeqRef.current) return;
+      setPairError(friendlyError(err));
     } finally {
-      setPairLoading(false);
+      if (seq === loadSeqRef.current) setPairLoading(false);
     }
   };
 

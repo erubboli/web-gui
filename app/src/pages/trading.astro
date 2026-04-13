@@ -20,9 +20,12 @@ try {
     id => parseFloat(balance.tokens[id].decimal) > 0
   );
   if (tokenIds.length > 0) {
-    const infos = await getTokensInfo(tokenIds);
-    balanceTokens = tokenIds.map((id, i) => {
-      const info = infos[i];
+    // node_get_tokens_info does not preserve input order — call one at a time to
+    // guarantee the ticker is assigned to the correct token ID.
+    const infoResults = await Promise.all(
+      tokenIds.map(id => getTokensInfo([id]).then(([info]) => ({ id, info: info ?? null })))
+    );
+    balanceTokens = infoResults.map(({ id, info }) => {
       let ticker = id.slice(0, 8) + '…';
       if (info?.type === 'FungibleToken') {
         ticker = hexToText(info.content.token_ticker) || ticker;

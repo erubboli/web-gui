@@ -57,6 +57,8 @@ export const GET: APIRoute = async ({ request }) => {
           method: 'subscribe_wallet_events',
           params: {},
         }));
+        // Tell the browser the upstream connection is healthy
+        send({ type: 'connected' });
       });
 
       ws.on('message', (raw) => {

@@ -30,6 +30,7 @@ Thumbs.db
 # Editor
 .vscode/
 .claude/
+.playwright-mcp/
 .idea/
 *.swp
 *.swo

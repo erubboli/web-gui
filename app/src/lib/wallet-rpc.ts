@@ -213,11 +213,11 @@ export async function nodeChainstateInfo(): Promise<ChainstateInfo> {
 
 // ── Account ───────────────────────────────────────────────────────────────────
 
-export async function getBalance(account = 0): Promise<WalletBalance> {
+export async function getBalance(account = 0, withLocked: 'Unlocked' | 'Locked' | 'Any' = 'Unlocked'): Promise<WalletBalance> {
   return rpcCall<WalletBalance>('account_balance', {
     account,
     utxo_states: ['Confirmed'],
-    with_locked: 'Unlocked',
+    with_locked: withLocked,
   });
 }
 
