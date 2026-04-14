@@ -95,9 +95,10 @@ jobs:
       - name: Package deploy files
         run: |
           mkdir mintlayer-gui
-          cp deploy/init.sh mintlayer-gui/
+          cp deploy/linux.sh           mintlayer-gui/
+          cp deploy/mac.sh             mintlayer-gui/
           cp deploy/docker-compose.yml mintlayer-gui/
-          chmod +x mintlayer-gui/init.sh
+          chmod +x mintlayer-gui/linux.sh mintlayer-gui/mac.sh
           tar czf mintlayer-gui.tar.gz mintlayer-gui/
 
       - name: Upload artifact
@@ -132,9 +133,8 @@ jobs:
           mkdir _site
           cp deploy/index.html _site/
           cp deploy/CNAME      _site/
-          # Resolve symlinks → real files so GitHub Pages serves them correctly
-          cp deploy/init.sh    _site/linux.sh
-          cp deploy/init.sh    _site/mac.sh
+          cp deploy/linux.sh   _site/linux.sh
+          cp deploy/mac.sh     _site/mac.sh
           chmod +x _site/linux.sh _site/mac.sh
 
       - name: Upload Pages artifact
