@@ -3,11 +3,11 @@ set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Mintlayer Web GUI — remote installer
-# Served at https://www.mintlayer.org/get/init.sh
-# Usage: bash <(curl -sSL https://www.mintlayer.org/get/init.sh)
+# Served at https://get.mintlayer.org/linux.sh
+# Usage: bash <(curl -sSL https://get.mintlayer.org/linux.sh)
 # ─────────────────────────────────────────────────────────────────────────────
 
-BASE_URL="https://www.mintlayer.org/get"
+BASE_URL="https://get.mintlayer.org/"
 
 # ── Colors & symbols ──────────────────────────────────────────────────────────
 RESET=$'\033[0m'
