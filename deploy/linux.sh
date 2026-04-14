@@ -3,11 +3,16 @@ set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Mintlayer Web GUI — remote installer
-# Served at https://get.mintlayer.org/linux.sh
+# Served at https://get.mintlayer.org/linux.sh  (also mac.sh)
 # Usage: bash <(curl -sSL https://get.mintlayer.org/linux.sh)
+#        bash <(curl -sSL https://get.mintlayer.org/mac.sh)
 # ─────────────────────────────────────────────────────────────────────────────
 
-BASE_URL="https://get.mintlayer.org/"
+# ── OS detection ──────────────────────────────────────────────────────────────
+case "$(uname -s)" in
+  Darwin) OS="macos" ;;
+  *)      OS="linux" ;;
+esac
 
 # ── Colors & symbols ──────────────────────────────────────────────────────────
 RESET=$'\033[0m'
@@ -98,43 +103,271 @@ rand_pass() {
   fi
 }
 
-# ── Bootstrap: download compose file if not already present ───────────────────
+# ── Bootstrap: create install dir and write docker-compose.yml ────────────────
 bootstrap_remote() {
-  if [[ -f docker-compose.yml ]]; then
-    return
-  fi
-
   printf "\n"
   printf "${CYAN}◆${RESET} ${BOLD}Install location${RESET}\n"
   printf "${GRAY}│  Where should Mintlayer Web GUI be installed?${RESET}\n"
-  printf "${CYAN}│${RESET}  Directory: ${GRAY}(${HOME}/mintlayer-gui)${RESET} "
+  printf "${CYAN}│${RESET}  Directory: ${GRAY}(${HOME}/mintlayer)${RESET} "
   read -r input
-  INSTALL_DIR="${input:-${HOME}/mintlayer-gui}"
+  INSTALL_DIR="${input:-${HOME}/mintlayer}"
 
   mkdir -p "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 
-  printf "${GRAY}│  Downloading docker-compose.yml...${RESET}\n"
-  if ! curl -fsSL "${BASE_URL}/docker-compose.yml" -o docker-compose.yml; then
-    err "Failed to download docker-compose.yml from ${BASE_URL}"
-    exit 1
+  if [[ -f docker-compose.yml ]]; then
+    ok "docker-compose.yml already exists — skipping"
+  else
+    cat > docker-compose.yml << 'COMPOSE_EOF'
+x-common: &common
+  volumes:
+    - "./mintlayer-data:/home/mintlayer"
+  restart: unless-stopped
+
+x-common-env: &common-env
+  ML_USER_ID: "${ML_USER_ID:-1000}"
+  ML_GROUP_ID: "${ML_GROUP_ID:-1000}"
+
+# Both mainnet and testnet env vars are set to the same credential values.
+# Only the vars matching the active NETWORK are picked up by each daemon.
+x-node-rpc-env: &node-rpc-env
+  ML_MAINNET_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+  ML_MAINNET_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+  ML_TESTNET_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+  ML_TESTNET_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+
+services:
+  # ─────────────────────────────────────────
+  # Core: Mintlayer full node
+  # ─────────────────────────────────────────
+  node-daemon:
+    <<: *common
+    image: "mintlayer/node-daemon:latest"
+    command: "node-daemon ${NETWORK:-mainnet}"
+    environment:
+      <<: [*common-env, *node-rpc-env]
+      RUST_LOG: "${RUST_LOG:-info}"
+      ML_MAINNET_NODE_RPC_BIND_ADDRESS: "0.0.0.0:3030"
+      ML_TESTNET_NODE_RPC_BIND_ADDRESS: "0.0.0.0:3030"
+    # Uncomment to expose the node RPC to the host
+    # ports:
+    #   - "3030:3030"
+
+  # ─────────────────────────────────────────
+  # Core: Wallet RPC daemon (headless wallet)
+  #
+  # WALLET_RPC_CMD is written by init.sh and contains the full resolved
+  # command, e.g. "wallet-rpc-daemon mainnet --wallet-file /home/mintlayer/wallet"
+  # Run ./init.sh (or edit .env manually) to change it.
+  # ─────────────────────────────────────────
+  wallet-rpc-daemon:
+    <<: *common
+    image: "mintlayer/wallet-rpc-daemon:latest"
+    command: "${WALLET_RPC_CMD:-wallet-rpc-daemon mainnet}"
+    depends_on:
+      - node-daemon
+    environment:
+      <<: *common-env
+      RUST_LOG: "${RUST_LOG:-info}"
+      # Mainnet
+      ML_MAINNET_WALLET_RPC_DAEMON_NODE_RPC_ADDRESS: "node-daemon:3030"
+      ML_MAINNET_WALLET_RPC_DAEMON_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+      ML_MAINNET_WALLET_RPC_DAEMON_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+      ML_MAINNET_WALLET_RPC_DAEMON_RPC_BIND_ADDRESS: "0.0.0.0:3034"
+      ML_MAINNET_WALLET_RPC_DAEMON_RPC_USERNAME: "${WALLET_RPC_USERNAME}"
+      ML_MAINNET_WALLET_RPC_DAEMON_RPC_PASSWORD: "${WALLET_RPC_PASSWORD}"
+      # Testnet
+      ML_TESTNET_WALLET_RPC_DAEMON_NODE_RPC_ADDRESS: "node-daemon:3030"
+      ML_TESTNET_WALLET_RPC_DAEMON_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+      ML_TESTNET_WALLET_RPC_DAEMON_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+      ML_TESTNET_WALLET_RPC_DAEMON_RPC_BIND_ADDRESS: "0.0.0.0:3034"
+      ML_TESTNET_WALLET_RPC_DAEMON_RPC_USERNAME: "${WALLET_RPC_USERNAME}"
+      ML_TESTNET_WALLET_RPC_DAEMON_RPC_PASSWORD: "${WALLET_RPC_PASSWORD}"
+    restart: on-failure
+    # ports:
+    #   - "3034:3034"
+
+  # ─────────────────────────────────────────
+  # Web GUI (Astro SSR app)
+  # ─────────────────────────────────────────
+  web-gui:
+    image: "mintlayer/web-gui:latest"
+    depends_on:
+      - wallet-rpc-daemon
+    volumes:
+      # Read-only access to wallet data for file backup download
+      - "./mintlayer-data:/app/mintlayer-data:ro"
+      # Shared with wallet-rpc-daemon's /home/mintlayer/ so uploaded wallet files
+      # are accessible to the daemon at /home/mintlayer/uploads/<filename>
+      - "./mintlayer-data/uploads:/app/uploads"
+      # Server-side preferences (SQLite) — persists across browsers and restarts
+      - "./mintlayer-data/prefs:/app/prefs"
+    ports:
+      - "${WEB_GUI_PORT:-4321}:4321"
+    environment:
+      WALLET_RPC_URL: "http://wallet-rpc-daemon:3034"
+      WALLET_RPC_USERNAME: "${WALLET_RPC_USERNAME}"
+      WALLET_RPC_PASSWORD: "${WALLET_RPC_PASSWORD}"
+      NODE_RPC_URL: "http://node-daemon:3030"
+      NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+      NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+      NETWORK: "${NETWORK:-mainnet}"
+      INDEXER_URL: "http://api-web-server:3000"
+      PINATA_JWT: "${PINATA_JWT:-}"
+      IPFS_PROVIDER: "${IPFS_PROVIDER:-}"
+      FILEBASE_TOKEN: "${FILEBASE_TOKEN:-}"
+      UI_PASSWORD_HASH: "${UI_PASSWORD_HASH}"
+      UI_TOTP_SECRET: "${UI_TOTP_SECRET}"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      WALLET_RPC_CMD: "${WALLET_RPC_CMD:-}"
+      INDEXER_ENABLED: "${INDEXER_ENABLED:-false}"
+      HOST: "0.0.0.0"
+      PORT: "4321"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Optional: wallet-cli  (profile: wallet_cli)
+  # Usage: docker compose run --rm wallet-cli
+  # ─────────────────────────────────────────
+  wallet-cli:
+    <<: *common
+    image: "mintlayer/wallet-cli:latest"
+    command: "wallet-cli"
+    depends_on:
+      - wallet-rpc-daemon
+    environment:
+      <<: *common-env
+      ML_WALLET_REMOTE_RPC_WALLET_ADDRESS: "wallet-rpc-daemon:3034"
+      ML_WALLET_REMOTE_RPC_WALLET_USERNAME: "${WALLET_RPC_USERNAME}"
+      ML_WALLET_REMOTE_RPC_WALLET_PASSWORD: "${WALLET_RPC_PASSWORD}"
+    profiles:
+      - wallet_cli
+
+  # ─────────────────────────────────────────
+  # Optional: Indexer stack  (profile: indexer)
+  # Start with: docker compose --profile indexer up -d
+  # ─────────────────────────────────────────
+  postgres:
+    image: "postgres:16-alpine"
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-mintlayer}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      POSTGRES_DB: "${POSTGRES_DB:-mintlayer}"
+    profiles:
+      - indexer
+    restart: unless-stopped
+
+  api-blockchain-scanner-daemon:
+    <<: *common
+    image: "mintlayer/api-blockchain-scanner-daemon:latest"
+    depends_on:
+      - node-daemon
+      - postgres
+    environment:
+      <<: *common-env
+      RUST_LOG: "${RUST_LOG:-info}"
+      ML_API_SCANNER_DAEMON_NETWORK: "${NETWORK:-mainnet}"
+      ML_API_SCANNER_DAEMON_NODE_RPC_ADDRESS: "node-daemon:3030"
+      ML_API_SCANNER_DAEMON_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+      ML_API_SCANNER_DAEMON_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+      ML_API_SCANNER_DAEMON_POSTGRES_HOST: "postgres"
+      ML_API_SCANNER_DAEMON_POSTGRES_USER: "${POSTGRES_USER:-mintlayer}"
+      ML_API_SCANNER_DAEMON_POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      ML_API_SCANNER_DAEMON_POSTGRES_DATABASE: "${POSTGRES_DB:-mintlayer}"
+    profiles:
+      - indexer
+    restart: unless-stopped
+
+  api-web-server:
+    image: "mintlayer/api-web-server:latest"
+    depends_on:
+      - postgres
+      - node-daemon
+    ports:
+      - "${API_WEB_SERVER_PORT:-3000}:3000"
+    environment:
+      ML_API_WEB_SRV_NETWORK: "${NETWORK:-mainnet}"
+      ML_API_WEB_SRV_BIND_ADDRESS: "0.0.0.0:3000"
+      ML_API_WEB_SRV_NODE_RPC_ADDRESS: "node-daemon:3030"
+      ML_API_WEB_SRV_NODE_RPC_USERNAME: "${NODE_RPC_USERNAME}"
+      ML_API_WEB_SRV_NODE_RPC_PASSWORD: "${NODE_RPC_PASSWORD}"
+      ML_API_WEB_SRV_POSTGRES_HOST: "postgres"
+      ML_API_WEB_SRV_POSTGRES_USER: "${POSTGRES_USER:-mintlayer}"
+      ML_API_WEB_SRV_POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      ML_API_WEB_SRV_POSTGRES_DATABASE: "${POSTGRES_DB:-mintlayer}"
+    profiles:
+      - indexer
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Optional: HTTPS via Caddy  (profile: https)
+  # Automatically provisions a TLS certificate via Let's Encrypt.
+  # Activate with: docker compose --profile https up -d
+  # ─────────────────────────────────────────
+  caddy:
+    image: caddy:alpine
+    command: caddy reverse-proxy --from https://${DOMAIN} --to web-gui:4321
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "caddy-data:/data"
+      - "caddy-config:/config"
+    depends_on:
+      - web-gui
+    profiles:
+      - https
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Optional: DuckDNS dynamic DNS updater  (profile: duckdns)
+  # Keeps your duckdns.org subdomain pointing at this server's IP.
+  # Activate alongside https: docker compose --profile https --profile duckdns up -d
+  # ─────────────────────────────────────────
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    environment:
+      SUBDOMAINS: "${DUCKDNS_SUBDOMAIN:-}"
+      TOKEN: "${DUCKDNS_TOKEN:-}"
+      TZ: "UTC"
+      LOG_FILE: "false"
+    profiles:
+      - duckdns
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+COMPOSE_EOF
+    ok "docker-compose.yml written to ${INSTALL_DIR}"
   fi
-  ok "Files downloaded to ${INSTALL_DIR}"
+
   printf "${GRAY}└─────────────────────────────────────────${RESET}\n"
 }
 
-# ── Docker install instructions (Linux only) ──────────────────────────────────
+# ── Docker install instructions ───────────────────────────────────────────────
 docker_install_hint() {
   printf "\n"
-  printf "${BOLD}  Install Docker Engine on Linux:${RESET}\n"
-  printf "  Ubuntu/Debian:\n"
-  printf "    curl -fsSL https://get.docker.com | sh\n"
-  printf "    sudo usermod -aG docker \$USER   # then log out and back in\n"
-  printf "\n"
-  printf "  Or follow the official guide for your distro:\n"
-  printf "  https://docs.docker.com/engine/install/\n"
-  printf "\n"
-  printf "  After installing, re-run this script.\n"
+  if [[ "$OS" == "macos" ]]; then
+    printf "${BOLD}  Install Docker Desktop for Mac:${RESET}\n"
+    printf "  1. Download from https://docs.docker.com/desktop/install/mac-install/\n"
+    printf "  2. Open the .dmg and drag Docker to Applications\n"
+    printf "  3. Launch Docker Desktop and wait for the whale icon to stop animating\n"
+    printf "  4. Re-run this script\n"
+  else
+    printf "${BOLD}  Install Docker Engine on Linux:${RESET}\n"
+    printf "  Ubuntu/Debian:\n"
+    printf "    curl -fsSL https://get.docker.com | sh\n"
+    printf "    sudo usermod -aG docker \$USER   # then log out and back in\n"
+    printf "\n"
+    printf "  Or follow the official guide for your distro:\n"
+    printf "  https://docs.docker.com/engine/install/\n"
+    printf "\n"
+    printf "  After installing, re-run this script.\n"
+  fi
   printf "\n"
 }
 
@@ -148,20 +381,34 @@ check_prereqs() {
 
   if ! docker info &>/dev/null 2>&1; then
     err "Docker is installed but the daemon is not running."
-    printf "  ${YELLOW}▲${RESET}  Run: ${GRAY}sudo systemctl start docker${RESET}\n\n"
+    if [[ "$OS" == "macos" ]]; then
+      printf "  ${YELLOW}▲${RESET}  Start Docker Desktop and wait for it to finish loading, then re-run this script.\n\n"
+    else
+      printf "  ${YELLOW}▲${RESET}  Run: ${GRAY}sudo systemctl start docker${RESET}\n\n"
+    fi
     exit 1
   fi
 
   if ! docker compose version &>/dev/null 2>&1 && ! command -v docker-compose &>/dev/null; then
     err "Docker Compose is not available."
-    printf "  Install with: ${GRAY}sudo apt install docker-compose-plugin${RESET}\n"
-    printf "  Or see: https://docs.docker.com/compose/install/\n\n"
+    if [[ "$OS" == "macos" ]]; then
+      printf "  Docker Compose is bundled with Docker Desktop for Mac.\n"
+      printf "  Download Docker Desktop from https://docs.docker.com/desktop/install/mac-install/\n\n"
+    else
+      printf "  Install with: ${GRAY}sudo apt install docker-compose-plugin${RESET}\n"
+      printf "  Or see: https://docs.docker.com/compose/install/\n\n"
+    fi
     exit 1
   fi
 
   command -v python3 &>/dev/null || {
     err "Python 3 is not installed (required for password hashing)."
-    printf "  Install with: ${GRAY}sudo apt install python3${RESET}\n\n"
+    if [[ "$OS" == "macos" ]]; then
+      printf "  Install with: ${GRAY}brew install python3${RESET}\n"
+      printf "  Or download from https://www.python.org/downloads/macos/\n\n"
+    else
+      printf "  Install with: ${GRAY}sudo apt install python3${RESET}\n\n"
+    fi
     exit 1
   }
 }
@@ -220,40 +467,7 @@ esac
 divider
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2 — Wallet
-# ─────────────────────────────────────────────────────────────────────────────
-step "Wallet"
-hint "The wallet-rpc-daemon opens one wallet file at a time."
-hint "Wallet files live in ./mintlayer-data/ (mapped to /home/mintlayer/ inside containers)."
-hint ""
-
-WALLET_CHOICE=""
-choose WALLET_CHOICE "Do you have an existing wallet file to load?" \
-  "No — I'll create a new wallet via the web UI after starting" \
-  "Yes — I have a wallet file to load on startup"
-
-WALLET_FILE=""
-case "$WALLET_CHOICE" in
-  "Yes — I have a wallet file to load on startup")
-    ask "Existing wallet filename"
-    hint "Copy the file into ./mintlayer-data/ before starting."
-    hint "Enter only the filename, not the full path."
-    prompt WALLET_FILE "Filename:" "wallet"
-    WALLET_ACTION="existing"
-    warn "Remember to copy your wallet file to ./mintlayer-data/${WALLET_FILE} before starting."
-    ;;
-  *)
-    WALLET_ACTION="create"
-    hint "The daemon will start without a wallet loaded."
-    hint "Go to http://<your-server-ip>:<port>/setup to create your wallet, then"
-    hint "update WALLET_RPC_CMD in .env and restart: docker compose restart wallet-rpc-daemon"
-    ;;
-esac
-
-divider
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 3 — Passwords
+# Step 2 — Passwords
 # ─────────────────────────────────────────────────────────────────────────────
 step "Passwords"
 hint "Two internal RPC services need authentication."
@@ -290,7 +504,7 @@ WALLET_RPC_USERNAME="wallet_user"
 divider
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Web UI access (password + TOTP 2FA)
+# Step 3 — Web UI access (password + TOTP 2FA)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Web UI access"
 hint "Protect the wallet interface with a password and authenticator app (TOTP 2FA)."
@@ -378,7 +592,7 @@ ok "2FA configured"
 divider
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5 — Web GUI port
+# Step 4 — Web GUI port
 # ─────────────────────────────────────────────────────────────────────────────
 step "Web interface"
 
@@ -390,6 +604,65 @@ while ! [[ "$WEB_GUI_PORT" =~ ^[0-9]+$ ]] || (( WEB_GUI_PORT < 1 || WEB_GUI_PORT
   printf "${CYAN}│${RESET}  ${RED}Enter a valid port number (1-65535)${RESET}\n"
   prompt WEB_GUI_PORT "Port:" "4321"
 done
+
+divider
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 5 — HTTPS / Public access
+# ─────────────────────────────────────────────────────────────────────────────
+step "HTTPS / Public access"
+hint "Caddy can automatically provision a free TLS certificate (Let's Encrypt)"
+hint "so the GUI is served over HTTPS — recommended for internet-facing servers."
+hint ""
+
+HTTPS_SETUP="no"
+confirm HTTPS_SETUP "Set up HTTPS with automatic TLS certificate?" "N"
+
+DOMAIN=""
+DUCKDNS_SUBDOMAIN=""
+DUCKDNS_TOKEN=""
+
+if [[ "$HTTPS_SETUP" == "yes" ]]; then
+  DOMAIN_TYPE=""
+  choose DOMAIN_TYPE "How will you reach this server?" \
+    "I have a domain name already pointing at this server's IP" \
+    "Set up a free DuckDNS subdomain (e.g. mywallet.duckdns.org)"
+
+  case "$DOMAIN_TYPE" in
+    *"domain name"*)
+      ask "Domain name"
+      hint "e.g. wallet.example.com — DNS must already resolve to this server"
+      prompt DOMAIN "Domain:"
+      while [[ -z "$DOMAIN" ]]; do
+        printf "${CYAN}│${RESET}  ${RED}Domain cannot be empty${RESET}\n"
+        prompt DOMAIN "Domain:"
+      done
+      ok "Domain: ${DOMAIN}"
+      ;;
+    *"DuckDNS"*)
+      ask "DuckDNS setup"
+      hint "1. Go to https://www.duckdns.org and sign in (free, no expiry)"
+      hint "2. Create a subdomain, e.g. 'mywallet' → mywallet.duckdns.org"
+      hint "3. Copy the token shown at the top of the page"
+      printf "${CYAN}│${RESET}\n"
+      prompt DUCKDNS_SUBDOMAIN "Subdomain (without .duckdns.org):"
+      while [[ -z "$DUCKDNS_SUBDOMAIN" ]]; do
+        printf "${CYAN}│${RESET}  ${RED}Subdomain cannot be empty${RESET}\n"
+        prompt DUCKDNS_SUBDOMAIN "Subdomain:"
+      done
+      prompt_secret DUCKDNS_TOKEN "DuckDNS token:"
+      while [[ -z "$DUCKDNS_TOKEN" ]]; do
+        printf "${CYAN}│${RESET}  ${RED}Token cannot be empty${RESET}\n"
+        prompt_secret DUCKDNS_TOKEN "DuckDNS token:"
+      done
+      DOMAIN="${DUCKDNS_SUBDOMAIN}.duckdns.org"
+      ok "DuckDNS configured — ${DOMAIN}"
+      ;;
+  esac
+
+  printf "${CYAN}│${RESET}\n"
+  warn "Ensure ports 80 and 443 are open in your firewall / security group."
+fi
 
 divider
 
@@ -413,9 +686,9 @@ PINATA_JWT=""
 
 IPFS_CHOICE=""
 choose IPFS_CHOICE "Choose IPFS provider:" \
-  "None — disable IPFS uploads" \
   "Filebase (recommended — 5 GB free, always public)" \
-  "Pinata (paid account required to make files public)"
+  "Pinata (paid account required to make files public)" \
+  "None — disable IPFS uploads"
 
 case "$IPFS_CHOICE" in
   *"Filebase"*)
@@ -491,16 +764,10 @@ printf "\n"
 step "Summary"
 printf "${CYAN}│${RESET}\n"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Network:"           "${BOLD}${NETWORK}${RESET}"
-
-wallet_summary="${BOLD}none — create via web UI at /setup${RESET}"
-if [[ -n "$WALLET_FILE" && "$WALLET_ACTION" == "existing" ]]; then
-  wallet_summary="${BOLD}${WALLET_FILE}${RESET} ${GRAY}(./mintlayer-data/${WALLET_FILE})${RESET}"
-fi
-printf "${CYAN}│${RESET}  %-22s ${wallet_summary}\n" "Wallet:"
-
 printf "${CYAN}│${RESET}  %-22s %s\n" "Passwords:"  "${BOLD}$([ "$USE_RANDOM_PASSWORDS" == "yes" ] && echo "randomly generated" || echo "custom")${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Web UI auth:"  "${BOLD}password + TOTP 2FA${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Web GUI:"    "${BOLD}http://<your-server-ip>:${WEB_GUI_PORT}${RESET}"
+printf "${CYAN}│${RESET}  %-22s %s\n" "HTTPS:" "${BOLD}$([ "$HTTPS_SETUP" == "yes" ] && echo "https://${DOMAIN}" || echo "disabled — HTTP only")${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "IPFS storage:" "${BOLD}$([ -n "$IPFS_PROVIDER" ] && echo "$IPFS_PROVIDER" || echo "disabled — token/NFT uploads disabled")${RESET}"
 printf "${CYAN}│${RESET}  %-22s %s\n" "Indexer:"    "${BOLD}$([ "$ENABLE_INDEXER" == "yes" ] && echo "enabled (port ${API_WEB_SERVER_PORT}) — Token Management + Trading active" || echo "disabled — Token Management + Trading hidden")${RESET}"
 printf "${CYAN}│${RESET}\n"
@@ -530,12 +797,9 @@ else
 fi
 
 INDEXER_ENABLED=$([ "$ENABLE_INDEXER" == "yes" ] && echo "true" || echo "false")
+ENABLE_HTTPS=$([ "$HTTPS_SETUP" == "yes" ] && echo "true" || echo "false")
 
-if [[ -n "$WALLET_FILE" ]]; then
-  WALLET_RPC_CMD="wallet-rpc-daemon ${NETWORK} --wallet-file /home/mintlayer/${WALLET_FILE}"
-else
-  WALLET_RPC_CMD="wallet-rpc-daemon ${NETWORK}"
-fi
+WALLET_RPC_CMD="wallet-rpc-daemon ${NETWORK}"
 
 cat > .env <<EOF
 # Generated by init.sh on $(date)
@@ -584,6 +848,12 @@ POSTGRES_USER=mintlayer
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=mintlayer
 API_WEB_SERVER_PORT=${API_WEB_SERVER_PORT}
+
+# HTTPS via Caddy (only used with --profile https)
+ENABLE_HTTPS=${ENABLE_HTTPS}
+DOMAIN=${DOMAIN}
+DUCKDNS_SUBDOMAIN=${DUCKDNS_SUBDOMAIN}
+DUCKDNS_TOKEN=${DUCKDNS_TOKEN}
 EOF
 
 ok ".env written"
@@ -608,7 +878,13 @@ if [[ "$START" == "yes" ]]; then
 
   PROFILES=""
   if [[ "$ENABLE_INDEXER" == "yes" ]]; then
-    PROFILES="--profile indexer"
+    PROFILES="$PROFILES --profile indexer"
+  fi
+  if [[ "$HTTPS_SETUP" == "yes" ]]; then
+    PROFILES="$PROFILES --profile https"
+    if [[ -n "$DUCKDNS_SUBDOMAIN" ]]; then
+      PROFILES="$PROFILES --profile duckdns"
+    fi
   fi
 
   $COMPOSE pull --quiet
@@ -628,19 +904,17 @@ printf "\n"
 
 printf "  ${BOLD}Next steps${RESET}\n\n"
 
-if [[ "$WALLET_ACTION" == "existing" && -n "$WALLET_FILE" ]]; then
-  printf "  ${YELLOW}1.${RESET} Copy your wallet file into the data directory:\n"
-  printf "     ${GRAY}cp /path/to/your/wallet ./mintlayer-data/${WALLET_FILE}${RESET}\n\n"
-  printf "  ${YELLOW}2.${RESET} Open the dashboard:\n"
-  printf "     ${CYAN}http://<your-server-ip>:${WEB_GUI_PORT}${RESET}\n\n"
+printf "  ${YELLOW}1.${RESET} Create your wallet via the web UI:\n"
+if [[ "$HTTPS_SETUP" == "yes" ]]; then
+  printf "     ${CYAN}https://${DOMAIN}/setup${RESET}\n"
+  printf "     ${GRAY}(direct HTTP fallback: http://<server-ip>:${WEB_GUI_PORT})${RESET}\n\n"
 else
-  printf "  ${YELLOW}1.${RESET} Create your wallet via the web UI:\n"
   printf "     ${CYAN}http://<your-server-ip>:${WEB_GUI_PORT}/setup${RESET}\n\n"
-  printf "  ${YELLOW}2.${RESET} Then point the daemon at the new file — edit ${GRAY}.env${RESET}:\n"
-  printf "     ${GRAY}WALLET_RPC_CMD=wallet-rpc-daemon ${NETWORK} --wallet-file /home/mintlayer/<filename>${RESET}\n\n"
-  printf "  ${YELLOW}3.${RESET} Restart the wallet daemon:\n"
-  printf "     ${GRAY}${COMPOSE} restart wallet-rpc-daemon${RESET}\n\n"
 fi
+printf "  ${YELLOW}2.${RESET} Then point the daemon at the new file — edit ${GRAY}.env${RESET}:\n"
+printf "     ${GRAY}WALLET_RPC_CMD=wallet-rpc-daemon ${NETWORK} --wallet-file /home/mintlayer/<filename>${RESET}\n\n"
+printf "  ${YELLOW}3.${RESET} Restart the wallet daemon:\n"
+printf "     ${GRAY}${COMPOSE} restart wallet-rpc-daemon${RESET}\n\n"
 
 printf "  ${DIM}Other useful commands:${RESET}\n"
 printf "  ${GRAY}${COMPOSE} logs -f wallet-rpc-daemon   # watch wallet daemon logs${RESET}\n"

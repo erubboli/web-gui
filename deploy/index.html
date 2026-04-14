@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Install Mintlayer Web GUI</title>
+  <meta name="description" content="Set up a full Mintlayer node, wallet daemon, and web interface in one command using Docker.">
+
+  <!-- Closest open-source match to Gilroy (used on mintlayer.org) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    /* ── Design tokens (from mintlayer.org) ──────────────────────────── */
+    :root {
+      --mint:        #37DB8C;
+      --mint-light:  #69EE96;
+      --purple:      #A383FF;
+      --bg-deep:     #04072A;
+      --bg-mid:      #1C1A5B;
+      --bg-card:     rgba(255, 255, 255, 0.04);
+      --border:      rgba(255, 255, 255, 0.09);
+      --border-mint: rgba(55, 219, 140, 0.28);
+      --txt:         #FFFFFF;
+      --txt-dim:     rgba(255, 255, 255, 0.55);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: radial-gradient(58.51% 79.63% at 63.05% 106.42%, #275A83 0%, #1C1A5B 47.5%, #04072A 100%) fixed;
+      min-height: 100vh;
+      color: var(--txt);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 22px 48px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(4, 7, 42, 0.6);
+      z-index: 10;
+    }
+
+    .logo { display: flex; align-items: center; text-decoration: none; }
+    .logo svg { height: 26px; width: auto; color: var(--txt); }
+
+    .header-link {
+      color: var(--txt-dim);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .header-link:hover { color: var(--txt); }
+    .header-link svg { opacity: 0.6; }
+
+    /* ── Hero ────────────────────────────────────────────────────────── */
+    main {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 80px 24px 80px;
+      text-align: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(55, 219, 140, 0.10);
+      border: 1px solid var(--border-mint);
+      color: var(--mint);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 16px;
+      border-radius: 100px;
+      margin-bottom: 32px;
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    h1 {
+      font-size: clamp(38px, 5.5vw, 60px);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -0.025em;
+      margin-bottom: 22px;
+    }
+
+    h1 .accent { color: var(--mint); }
+
+    .subtitle {
+      font-size: 18px;
+      color: var(--txt-dim);
+      line-height: 1.65;
+      max-width: 520px;
+      margin: 0 auto 52px;
+    }
+
+    /* ── Command box ─────────────────────────────────────────────────── */
+    .install-wrap {
+      max-width: 640px;
+      margin: 0 auto 16px;
+    }
+
+    .install-box {
+      display: flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-mint);
+      border-radius: 14px;
+      padding: 6px 6px 6px 22px;
+      gap: 12px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .install-box:hover {
+      border-color: rgba(55, 219, 140, 0.5);
+      box-shadow: 0 0 0 3px rgba(55, 219, 140, 0.08);
+    }
+
+    .terminal-prompt {
+      color: var(--mint);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+      font-size: 15px;
+      opacity: 0.7;
+      flex-shrink: 0;
+    }
+
+    .install-box code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.9);
+      flex: 1;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: 0.01em;
+    }
+
+    .copy-btn {
+      background: var(--mint);
+      color: #04072A;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 9px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      white-space: nowrap;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .copy-btn:hover  { background: var(--mint-light); }
+    .copy-btn:active { transform: scale(0.96); }
+
+    .copy-btn.copied {
+      background: #69EE96;
+    }
+
+    .copy-btn svg { flex-shrink: 0; transition: opacity 0.15s; }
+
+    .platform-note {
+      font-size: 13px;
+      color: var(--txt-dim);
+      margin-bottom: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .platform-note .sep { opacity: 0.3; }
+
+    .platform-note a {
+      color: var(--mint);
+      text-decoration: none;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .platform-note a:hover { text-decoration: underline; }
+
+    /* ── Modal ───────────────────────────────────────────────────────── */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 7, 42, 0.82);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      background: #0d1040;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      width: 100%;
+      max-width: 780px;
+      max-height: 82vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+      animation: modal-in 0.18s ease;
+    }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(10px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .modal-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .modal-title-file {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 13px;
+      color: var(--mint);
+      background: rgba(55, 219, 140, 0.10);
+      border: 1px solid var(--border-mint);
+      padding: 3px 10px;
+      border-radius: 6px;
+    }
+
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .modal-copy-btn {
+      background: var(--mint);
+      color: #04072A;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .modal-copy-btn:hover { background: var(--mint-light); }
+
+    .modal-close-btn {
+      background: rgba(255,255,255,0.07);
+      border: 1px solid var(--border);
+      color: var(--txt-dim);
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .modal-close-btn:hover { background: rgba(255,255,255,0.12); color: var(--txt); }
+
+    .modal-body {
+      overflow-y: auto;
+      padding: 0;
+      flex: 1;
+    }
+
+    /* Custom scrollbar */
+    .modal-body::-webkit-scrollbar { width: 6px; }
+    .modal-body::-webkit-scrollbar-track { background: transparent; }
+    .modal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+    .modal-body pre {
+      margin: 0;
+      padding: 24px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.82);
+      tab-size: 2;
+      white-space: pre;
+      overflow-x: auto;
+    }
+
+    /* Simple bash syntax colouring */
+    .modal-body pre .sh-comment  { color: #5a6a8a; font-style: italic; }
+    .modal-body pre .sh-string   { color: #a8d8a0; }
+    .modal-body pre .sh-keyword  { color: #A383FF; font-weight: 600; }
+    .modal-body pre .sh-builtin  { color: #69b4ff; }
+    .modal-body pre .sh-var      { color: #ffd580; }
+    .modal-body pre .sh-mint     { color: var(--mint); }
+    .modal-body pre .sh-number   { color: #ff9580; }
+
+    .modal-loading {
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--txt-dim);
+      font-size: 14px;
+    }
+
+    .modal-error {
+      padding: 48px 24px;
+      text-align: center;
+      color: #ff9580;
+      font-size: 14px;
+    }
+
+    .modal-footer {
+      padding: 12px 24px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--txt-dim);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .modal-line-count {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    /* ── Features ────────────────────────────────────────────────────── */
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--txt-dim);
+      margin-bottom: 24px;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 20px;
+      text-align: left;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .card:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .card-icon {
+      width: 40px;
+      height: 40px;
+      background: rgba(55, 219, 140, 0.10);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      font-size: 18px;
+    }
+
+    .card h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 7px;
+      letter-spacing: -0.01em;
+    }
+
+    .card p {
+      font-size: 13px;
+      color: var(--txt-dim);
+      line-height: 1.55;
+    }
+
+    /* ── What gets installed ─────────────────────────────────────────── */
+    .stack-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 72px;
+    }
+
+    .stack-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      text-align: left;
+    }
+
+    .stack-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+      flex-shrink: 0;
+    }
+
+    .stack-item span {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .stack-item small {
+      display: block;
+      font-size: 12px;
+      color: var(--txt-dim);
+      font-weight: 400;
+      margin-top: 1px;
+    }
+
+    /* ── Requirements ────────────────────────────────────────────────── */
+    .requirements {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 32px;
+      text-align: left;
+      margin-bottom: 72px;
+    }
+
+    .requirements .section-label {
+      margin-bottom: 18px;
+    }
+
+    .req-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .req-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .req-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+      flex-shrink: 0;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .footer-logo { display: flex; align-items: center; text-decoration: none; }
+    .footer-logo svg { height: 20px; width: auto; color: var(--txt); opacity: 0.6; }
+
+    .footer-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 13px;
+      color: var(--txt-dim);
+    }
+
+    .footer-links a {
+      color: var(--txt-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--mint); }
+
+    /* ── Responsive ──────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      header   { padding: 18px 20px; }
+      main     { padding: 56px 20px 60px; }
+      .features, .stack-grid { grid-template-columns: 1fr; }
+      footer   { padding: 24px 20px; flex-direction: column; align-items: flex-start; }
+      .install-box code { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<header>
+  <a href="https://www.mintlayer.org" class="logo" aria-label="Mintlayer">
+    <svg viewBox="0 0 149 31" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0L5.76399 2.42681V27.4018L0 29.8286V0Z" fill="#37DB8C"/>
+      <path d="M30.1878 29.8286L24.4238 27.4018V2.42681L30.1878 0V29.8286Z" fill="#37DB8C"/>
+      <path d="M8.18848 26.4021L13.8824 24.0041V14.4048L8.18848 12.0068V26.4021Z" fill="#37DB8C"/>
+      <path d="M21.9991 3.44165L16.3071 5.83957V15.4043L21.9991 17.8022V3.44165Z" fill="#37DB8C"/>
+      <path d="M56.4881 6.1228H52.8058L47.6177 14.8978L42.4049 6.1228H38.7207V24.6821H42.3007V12.6713L47.415 21.2615H47.8298L52.9441 12.6444V24.6821H56.4976L56.4881 6.1228Z" fill="currentColor"/>
+      <path d="M59.7163 24.6822H63.0633V11.4253H59.7163V24.6822Z" fill="currentColor"/>
+      <path d="M73.3352 11.0537C71.5983 11.0537 70.2496 11.7163 69.4711 12.9104V11.4254H66.126V24.6824H69.4711V17.5271C69.4711 15.2159 70.6909 14.2394 72.3237 14.2394C73.8296 14.2394 74.8922 15.1677 74.8922 16.9705V24.6862H78.2393V16.5429C78.2393 13.0163 76.0856 11.0537 73.3352 11.0537Z" fill="currentColor"/>
+      <path d="M88.5128 14.7129V11.4251H85.5825V7.71362L82.2355 9.34691V11.4251H79.9795V14.7129H82.2355V20.2233C82.2355 23.8018 83.819 25.2078 88.5128 24.6763V21.5753C86.594 21.6813 85.5825 21.6543 85.5825 20.2271V14.7129H88.5128Z" fill="currentColor"/>
+      <path d="M90.873 24.6822H94.2182V5.32739H90.873V24.6822Z" fill="currentColor"/>
+      <path d="M107.138 11.4251V12.9891C106.205 11.7968 104.803 11.063 102.911 11.063C99.4594 11.0534 96.603 14.1023 96.603 18.0545C96.603 22.0068 99.4557 25.0538 102.907 25.0538C104.801 25.0538 106.201 24.3122 107.135 23.1181V24.682H110.48V11.4251H107.138ZM103.54 21.793C101.49 21.793 99.9595 20.281 99.9595 18.0545C99.9595 15.828 101.49 14.3161 103.54 14.3161C105.589 14.3161 107.138 15.8261 107.138 18.0545C107.138 20.283 105.608 21.793 103.532 21.793H103.54Z" fill="currentColor"/>
+      <path d="M121.974 11.4253L119.095 20.3352L115.723 11.4253H112.065L117.382 24.2681C116.761 26.0439 115.827 26.8394 113.984 26.8144V29.9962C117.278 30.1888 119.477 28.5112 120.832 24.6919L125.554 11.4349L121.974 11.4253Z" fill="currentColor"/>
+      <path d="M129.467 19.4528H139.245C139.329 18.9897 139.373 18.5198 139.376 18.0488C139.376 14.1505 136.652 11.0476 132.812 11.0476C128.74 11.0476 125.965 14.0965 125.965 18.0488C125.965 22.001 128.713 25.048 133.072 25.048C135.563 25.048 137.508 24.0137 138.726 22.2109L136.029 20.62C135.46 21.3904 134.42 21.9451 133.123 21.9451C131.359 21.9567 129.941 21.2094 129.467 19.4528ZM129.414 16.8026C129.804 15.1058 131.022 14.1235 132.812 14.1235C134.212 14.1235 135.614 14.8939 136.032 16.8026H129.414Z" fill="currentColor"/>
+      <path d="M145.056 13.7057V11.4252H141.711V24.6822H145.056V18.3455C145.056 15.5624 147.261 14.7669 149 14.9788V11.1594C147.367 11.1594 145.73 11.9029 145.056 13.7057Z" fill="currentColor"/>
+      <path d="M59.7163 7.53074V9.38359H63.0633V6.1228L59.7163 7.53074Z" fill="currentColor"/>
+    </svg>
+  </a>
+
+  <a href="https://www.mintlayer.org" class="header-link">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8.5 2.5L3.5 7L8.5 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    mintlayer.org
+  </a>
+</header>
+
+<!-- ── Hero ────────────────────────────────────────────────────────────── -->
+<main>
+  <div class="badge">
+    <span class="badge-dot"></span>
+    Linux &amp; macOS installer
+  </div>
+
+  <h1>One command.<br>Full <span class="accent">Mintlayer</span> stack.</h1>
+
+  <p class="subtitle">
+    Node, wallet daemon, and web interface — all running in Docker.
+    Interactive setup wizard, no config files to edit manually.
+  </p>
+
+  <!-- Install command -->
+  <div class="install-wrap">
+    <div class="install-box">
+      <span class="terminal-prompt">$</span>
+      <code id="install-cmd">bash &lt;(curl -sSL https://get.mintlayer.org/linux.sh)</code>
+      <button class="copy-btn" id="copy-btn" onclick="copyCmd()" aria-label="Copy install command">
+        <svg id="copy-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="4.5" y="4.5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M2.5 9.5H2C1.44772 9.5 1 9.05228 1 8.5V2C1 1.44772 1.44772 1 2 1H8.5C9.05228 1 9.5 1.44772 9.5 2V2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <span id="copy-label">Copy</span>
+      </button>
+    </div>
+  </div>
+
+  <p class="platform-note">
+    <span id="os-label">Linux &amp; macOS</span>
+    <span class="sep">·</span>
+    Requires Docker
+    <span class="sep">·</span>
+    <a id="view-script-link" onclick="openModal()" role="button" tabindex="0">View script source</a>
+  </p>
+
+  <!-- What's included -->
+  <p class="section-label">What's included</p>
+  <div class="features">
+    <div class="card">
+      <div class="card-icon">⛓️</div>
+      <h3>Full Node</h3>
+      <p>Runs a complete Mintlayer node and syncs the full blockchain automatically.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔐</div>
+      <h3>Wallet Daemon</h3>
+      <p>Non-custodial wallet RPC daemon. Your keys never leave your machine.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🌐</div>
+      <h3>Web Interface</h3>
+      <p>Browser-based wallet UI with password and TOTP 2FA protection.</p>
+    </div>
+  </div>
+
+  <!-- Docker services -->
+  <div class="stack-grid">
+    <div class="stack-item">
+      <span class="stack-dot"></span>
+      <div>
+        <span>mintlayer/node-daemon</span>
+        <small>Full Mintlayer node · port 3030</small>
+      </div>
+    </div>
+    <div class="stack-item">
+      <span class="stack-dot"></span>
+      <div>
+        <span>mintlayer/wallet-rpc-daemon</span>
+        <small>Headless wallet · JSON-RPC 2.0</small>
+      </div>
+    </div>
+    <div class="stack-item">
+      <span class="stack-dot"></span>
+      <div>
+        <span>mintlayer/web-gui</span>
+        <small>Astro SSR web interface</small>
+      </div>
+    </div>
+    <div class="stack-item">
+      <span class="stack-dot"></span>
+      <div>
+        <span>PostgreSQL + indexer</span>
+        <small>Optional · enables token management</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Requirements -->
+  <div class="requirements">
+    <p class="section-label">Requirements</p>
+    <div class="req-list">
+      <div class="req-pill"><span class="dot"></span>Linux or macOS</div>
+      <div class="req-pill"><span class="dot"></span>Docker Desktop or Engine</div>
+      <div class="req-pill"><span class="dot"></span>Docker Compose v2</div>
+      <div class="req-pill"><span class="dot"></span>Python 3</div>
+      <div class="req-pill"><span class="dot"></span>~50 GB free disk (mainnet)</div>
+      <div class="req-pill"><span class="dot"></span>~5 GB free disk (testnet)</div>
+    </div>
+  </div>
+</main>
+
+<!-- ── Footer ───────────────────────────────────────────────────────────── -->
+<footer>
+  <a href="https://www.mintlayer.org" class="footer-logo" aria-label="Mintlayer">
+    <svg viewBox="0 0 149 31" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0L5.76399 2.42681V27.4018L0 29.8286V0Z" fill="#37DB8C"/>
+      <path d="M30.1878 29.8286L24.4238 27.4018V2.42681L30.1878 0V29.8286Z" fill="#37DB8C"/>
+      <path d="M8.18848 26.4021L13.8824 24.0041V14.4048L8.18848 12.0068V26.4021Z" fill="#37DB8C"/>
+      <path d="M21.9991 3.44165L16.3071 5.83957V15.4043L21.9991 17.8022V3.44165Z" fill="#37DB8C"/>
+      <path d="M56.4881 6.1228H52.8058L47.6177 14.8978L42.4049 6.1228H38.7207V24.6821H42.3007V12.6713L47.415 21.2615H47.8298L52.9441 12.6444V24.6821H56.4976L56.4881 6.1228Z" fill="currentColor"/>
+      <path d="M59.7163 24.6822H63.0633V11.4253H59.7163V24.6822Z" fill="currentColor"/>
+      <path d="M73.3352 11.0537C71.5983 11.0537 70.2496 11.7163 69.4711 12.9104V11.4254H66.126V24.6824H69.4711V17.5271C69.4711 15.2159 70.6909 14.2394 72.3237 14.2394C73.8296 14.2394 74.8922 15.1677 74.8922 16.9705V24.6862H78.2393V16.5429C78.2393 13.0163 76.0856 11.0537 73.3352 11.0537Z" fill="currentColor"/>
+      <path d="M88.5128 14.7129V11.4251H85.5825V7.71362L82.2355 9.34691V11.4251H79.9795V14.7129H82.2355V20.2233C82.2355 23.8018 83.819 25.2078 88.5128 24.6763V21.5753C86.594 21.6813 85.5825 21.6543 85.5825 20.2271V14.7129H88.5128Z" fill="currentColor"/>
+      <path d="M90.873 24.6822H94.2182V5.32739H90.873V24.6822Z" fill="currentColor"/>
+      <path d="M107.138 11.4251V12.9891C106.205 11.7968 104.803 11.063 102.911 11.063C99.4594 11.0534 96.603 14.1023 96.603 18.0545C96.603 22.0068 99.4557 25.0538 102.907 25.0538C104.801 25.0538 106.201 24.3122 107.135 23.1181V24.682H110.48V11.4251H107.138ZM103.54 21.793C101.49 21.793 99.9595 20.281 99.9595 18.0545C99.9595 15.828 101.49 14.3161 103.54 14.3161C105.589 14.3161 107.138 15.8261 107.138 18.0545C107.138 20.283 105.608 21.793 103.532 21.793H103.54Z" fill="currentColor"/>
+      <path d="M121.974 11.4253L119.095 20.3352L115.723 11.4253H112.065L117.382 24.2681C116.761 26.0439 115.827 26.8394 113.984 26.8144V29.9962C117.278 30.1888 119.477 28.5112 120.832 24.6919L125.554 11.4349L121.974 11.4253Z" fill="currentColor"/>
+      <path d="M129.467 19.4528H139.245C139.329 18.9897 139.373 18.5198 139.376 18.0488C139.376 14.1505 136.652 11.0476 132.812 11.0476C128.74 11.0476 125.965 14.0965 125.965 18.0488C125.965 22.001 128.713 25.048 133.072 25.048C135.563 25.048 137.508 24.0137 138.726 22.2109L136.029 20.62C135.46 21.3904 134.42 21.9451 133.123 21.9451C131.359 21.9567 129.941 21.2094 129.467 19.4528ZM129.414 16.8026C129.804 15.1058 131.022 14.1235 132.812 14.1235C134.212 14.1235 135.614 14.8939 136.032 16.8026H129.414Z" fill="currentColor"/>
+      <path d="M145.056 13.7057V11.4252H141.711V24.6822H145.056V18.3455C145.056 15.5624 147.261 14.7669 149 14.9788V11.1594C147.367 11.1594 145.73 11.9029 145.056 13.7057Z" fill="currentColor"/>
+      <path d="M59.7163 7.53074V9.38359H63.0633V6.1228L59.7163 7.53074Z" fill="currentColor"/>
+    </svg>
+  </a>
+
+  <div class="footer-links">
+    <a href="https://github.com/mintlayer/mintlayer-web-gui">GitHub</a>
+    <a href="https://www.mintlayer.org/wallet">Wallet</a>
+    <a href="https://www.mintlayer.org/technology">Technology</a>
+    <a href="https://docs.mintlayer.org">Documentation</a>
+    <a href="https://www.mintlayer.org">mintlayer.org</a>
+  </div>
+</footer>
+
+<!-- ── Script viewer modal ─────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-heading">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">
+        <span id="modal-heading">Install script</span>
+        <span class="modal-title-file" id="modal-filename">linux.sh</span>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-copy-btn" id="modal-copy-btn" onclick="copyScript()">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4.5" y="4.5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M2.5 9.5H2C1.44772 9.5 1 9.05228 1 8.5V2C1 1.44772 1.44772 1 2 1H8.5C9.05228 1 9.5 1.44772 9.5 2V2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          <span id="modal-copy-label">Copy all</span>
+        </button>
+        <button class="modal-close-btn" onclick="closeModal()" aria-label="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="modal-loading">Loading…</div>
+    </div>
+    <div class="modal-footer">
+      <span id="modal-line-count" class="modal-line-count"></span>
+      <span>bash &lt;(curl -sSL https://get.mintlayer.org/<span id="modal-footer-file">linux.sh</span>)</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── OS detection ────────────────────────────────────────────────────────
+  const OS = (() => {
+    const p = (navigator.platform || '').toLowerCase();
+    const u = navigator.userAgent.toLowerCase();
+    if (p.includes('mac') || u.includes('mac os')) return 'macos';
+    return 'linux';
+  })();
+
+  const SCRIPT_FILE = OS === 'macos' ? 'mac.sh' : 'linux.sh';
+  const INSTALL_CMD = `bash <(curl -sSL https://get.mintlayer.org/${SCRIPT_FILE})`;
+
+  // ── Patch hero on load ───────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    // Command box
+    document.getElementById('install-cmd').textContent = INSTALL_CMD;
+
+    // OS label
+    document.getElementById('os-label').textContent =
+      OS === 'macos' ? 'macOS detected' : 'Linux detected';
+
+    // Modal filenames
+    document.getElementById('modal-filename').textContent    = SCRIPT_FILE;
+    document.getElementById('modal-footer-file').textContent = SCRIPT_FILE;
+  });
+
+  // ── Copy install command ─────────────────────────────────────────────────
+  function copyCmd() {
+    const btn   = document.getElementById('copy-btn');
+    const label = document.getElementById('copy-label');
+    writeToClipboard(INSTALL_CMD, () => {
+      label.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { label.textContent = 'Copy'; btn.classList.remove('copied'); }, 2200);
+    });
+  }
+
+  // ── Clipboard helper ─────────────────────────────────────────────────────
+  function writeToClipboard(text, onDone) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(onDone).catch(() => clipboardFallback(text, onDone));
+    } else {
+      clipboardFallback(text, onDone);
+    }
+  }
+
+  function clipboardFallback(text, onDone) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onDone();
+  }
+
+  // ── Modal ────────────────────────────────────────────────────────────────
+  let scriptContent = null;   // cached after first fetch
+
+  function openModal() {
+    document.getElementById('modal-backdrop').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    if (!scriptContent) fetchScript();
+  }
+
+  function closeModal() {
+    document.getElementById('modal-backdrop').classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  // Close on backdrop click
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('modal-backdrop').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+    // Close on Escape
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') closeModal();
+    });
+    // Keyboard activation for the link
+    document.getElementById('view-script-link').addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') openModal();
+    });
+  });
+
+  async function fetchScript() {
+    const body = document.getElementById('modal-body');
+    try {
+      const res  = await fetch(`/${SCRIPT_FILE}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      scriptContent = text;
+      renderScript(text);
+    } catch (err) {
+      body.innerHTML = `<div class="modal-error">Could not load ${SCRIPT_FILE}: ${err.message}</div>`;
+    }
+  }
+
+  function renderScript(text) {
+    const lines = text.split('\n');
+    document.getElementById('modal-line-count').textContent =
+      `${lines.length} lines`;
+
+    const highlighted = highlight(text);
+    document.getElementById('modal-body').innerHTML =
+      `<pre>${highlighted}</pre>`;
+  }
+
+  // ── Lightweight bash syntax highlighter ─────────────────────────────────
+  function highlight(raw) {
+    // Escape HTML first
+    const esc = raw
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const lines = esc.split('\n');
+    return lines.map(line => {
+      // Full-line comment
+      if (/^\s*#/.test(line)) {
+        return `<span class="sh-comment">${line}</span>`;
+      }
+
+      return line
+        // Inline comment (after code)
+        .replace(/((?:^|[^&])\s)(#[^{].*)/g, '$1<span class="sh-comment">$2</span>')
+        // Double-quoted strings
+        .replace(/"((?:[^"\\]|\\.)*)"/g, '<span class="sh-string">"$1"</span>')
+        // Single-quoted strings
+        .replace(/'([^']*)'/g, '<span class="sh-string">\'$1\'</span>')
+        // Shell keywords
+        .replace(/\b(if|then|else|elif|fi|for|while|do|done|case|esac|in|function|return|local|break|exit)\b/g,
+          '<span class="sh-keyword">$1</span>')
+        // Builtins / commands
+        .replace(/\b(echo|printf|read|source|export|declare|shift|set|unset|cd|mkdir|cat|curl|chmod|command|sleep)\b/g,
+          '<span class="sh-builtin">$1</span>')
+        // Variable references  ${VAR}  or  $VAR
+        .replace(/(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)/g,
+          '<span class="sh-var">$1</span>')
+        // Numbers (standalone)
+        .replace(/\b(\d+)\b/g, '<span class="sh-number">$1</span>');
+    }).join('\n');
+  }
+
+  // ── Copy script ──────────────────────────────────────────────────────────
+  function copyScript() {
+    if (!scriptContent) return;
+    const btn   = document.getElementById('modal-copy-btn');
+    const label = document.getElementById('modal-copy-label');
+    writeToClipboard(scriptContent, () => {
+      label.textContent = 'Copied!';
+      setTimeout(() => { label.textContent = 'Copy all'; }, 2200);
+    });
+  }
+</script>
+
+</body>
+</html>
